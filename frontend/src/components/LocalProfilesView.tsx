@@ -13,6 +13,8 @@ import {
   Settings2,
   Layers,
   AlertCircle,
+  Pencil,
+  Copy,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { LocalPreset, LocalPresetsResponse } from '../api/client';
@@ -20,6 +22,7 @@ import { Card, CardContent } from './Card';
 import { Button } from './Button';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { LocalPresetEditModal } from './LocalPresetEditModal';
 
 // Known material types for name-parsing fallback
 const MATERIAL_TYPES = ['PLA', 'PETG', 'PCTG', 'ABS', 'ASA', 'TPU', 'PC', 'PA', 'PVA', 'HIPS', 'PP', 'PET', 'NYLON'];
@@ -58,11 +61,13 @@ function parseVendorFromName(name: string): string | null {
 function PresetCard({
   preset,
   onDelete,
+  onEdit,
   onExpand,
   isExpanded,
 }: {
   preset: LocalPreset;
   onDelete: (id: number) => void;
+  onEdit: (preset: LocalPreset, mode: 'edit' | 'duplicate') => void;
   onExpand: (id: number | null) => void;
   isExpanded: boolean;
 }) {
@@ -134,8 +139,22 @@ function PresetCard({
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0">
-            {/* 4) Only delete, no edit */}
             {hasPermission('settings:update') && (
+              <>
+              <button
+                onClick={() => onEdit(preset, 'edit')}
+                className="p-1 text-bambu-gray hover:text-white transition-colors"
+                title={t('profiles.localProfiles.edit')}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => onEdit(preset, 'duplicate')}
+                className="p-1 text-bambu-gray hover:text-white transition-colors"
+                title={t('profiles.localProfiles.duplicate')}
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
               <button
                 onClick={() => onDelete(preset.id)}
                 className="p-1 text-bambu-gray hover:text-red-600 dark:hover:text-red-400 transition-colors"
@@ -143,6 +162,7 @@ function PresetCard({
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
+              </>
             )}
             <button
               onClick={() => onExpand(isExpanded ? null : preset.id)}
@@ -227,6 +247,7 @@ export function LocalProfilesView() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [editing, setEditing] = useState<{ preset: LocalPreset; mode: 'edit' | 'duplicate' } | null>(null);
 
   const { data: presets, isLoading } = useQuery({
     queryKey: ['localPresets'],
@@ -431,6 +452,7 @@ export function LocalProfilesView() {
                     key={p.id}
                     preset={p}
                     onDelete={(id) => setDeleteConfirm(id)}
+                    onEdit={(preset, mode) => setEditing({ preset, mode })}
                     onExpand={setExpandedId}
                     isExpanded={expandedId === p.id}
                   />
@@ -455,6 +477,7 @@ export function LocalProfilesView() {
                     key={p.id}
                     preset={p}
                     onDelete={(id) => setDeleteConfirm(id)}
+                    onEdit={(preset, mode) => setEditing({ preset, mode })}
                     onExpand={setExpandedId}
                     isExpanded={expandedId === p.id}
                   />
@@ -479,6 +502,7 @@ export function LocalProfilesView() {
                     key={p.id}
                     preset={p}
                     onDelete={(id) => setDeleteConfirm(id)}
+                    onEdit={(preset, mode) => setEditing({ preset, mode })}
                     onExpand={setExpandedId}
                     isExpanded={expandedId === p.id}
                   />
@@ -487,6 +511,10 @@ export function LocalProfilesView() {
             </div>
           )}
         </div>
+      )}
+
+      {editing && (
+        <LocalPresetEditModal preset={editing.preset} mode={editing.mode} onClose={() => setEditing(null)} />
       )}
 
       {/* Delete Confirmation Modal */}

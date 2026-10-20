@@ -273,4 +273,83 @@ describe('LocalProfilesView', () => {
       ),
     ).toBe(true);
   });
+
+  describe('editor', () => {
+    const detail = {
+      ...mockLocalPresets.filament[0],
+      setting: {
+        name: 'Overture PLA Matte @BBL X1C',
+        filament_settings_id: ['Overture PLA Matte @BBL X1C'],
+        nozzle_temperature: ['220'],
+      },
+    };
+    let body: Record<string, unknown> | null;
+
+    beforeEach(() => {
+      body = null;
+      server.use(
+        http.get('/api/v1/local-presets/1', () => HttpResponse.json(detail)),
+        http.put('/api/v1/local-presets/1', async ({ request }) => {
+          body = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json(mockLocalPresets.filament[0]);
+        }),
+        http.post('/api/v1/local-presets/', async ({ request }) => {
+          body = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...mockLocalPresets.filament[0], id: 9 });
+        }),
+      );
+    });
+
+    const openEditor = async (title: RegExp) => {
+      render(<LocalProfilesView />);
+      await waitFor(() => expect(screen.getByText('Overture PLA Matte @BBL X1C')).toBeInTheDocument());
+      fireEvent.click(screen.getAllByTitle(title)[0]);
+      // The JSON tab, once the preset's full setting has loaded.
+      return waitFor(() => {
+        const el = document.querySelector('textarea');
+        expect(el?.value).toContain('nozzle_temperature');
+        return el!;
+      });
+    };
+
+    it('saves JSON edits and keeps the settings id in step with a rename', async () => {
+      const json = await openEditor(/^edit$/i);
+      fireEvent.change(json, { target: { value: json.value.replace('"220"', '"225"') } });
+      fireEvent.change(screen.getByDisplayValue('Overture PLA Matte @BBL X1C'), { target: { value: 'My PLA' } });
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(body).not.toBeNull());
+      expect(body!.name).toBe('My PLA');
+      const setting = body!.setting as Record<string, unknown>;
+      expect(setting.nozzle_temperature).toEqual(['225']);
+      expect(setting.name).toBe('My PLA');
+      expect(setting.filament_settings_id).toEqual(['My PLA']);
+    });
+
+    it('blocks saving invalid JSON', async () => {
+      const json = await openEditor(/^edit$/i);
+      fireEvent.change(json, { target: { value: '{ nope' } });
+      expect(screen.getByText(/invalid json/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+    });
+
+    it('saves edits as a new preset, leaving the original', async () => {
+      const json = await openEditor(/^edit$/i);
+      fireEvent.change(json, { target: { value: json.value.replace('"220"', '"230"') } });
+      fireEvent.click(screen.getByRole('button', { name: /save as new/i }));
+
+      await waitFor(() => expect(body).not.toBeNull());
+      // Only the POST handler records a preset_type: the original was not PUT.
+      expect(body).toMatchObject({ name: 'Overture PLA Matte @BBL X1C (Copy)', preset_type: 'filament' });
+      expect((body!.setting as Record<string, unknown>).nozzle_temperature).toEqual(['230']);
+    });
+
+    it('duplicates as a new preset', async () => {
+      await openEditor(/^duplicate$/i);
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(body).not.toBeNull());
+      expect(body).toMatchObject({ name: 'Overture PLA Matte @BBL X1C (Copy)', preset_type: 'filament' });
+    });
+  });
 });
