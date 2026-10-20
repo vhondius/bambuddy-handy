@@ -20,7 +20,7 @@ import { formatDuration } from '../utils/date';
 import { Button } from './Button';
 import { GcodeToolpathViewer } from './GcodeToolpathViewer';
 import { PrintModal } from './PrintModal';
-import { PresetDropdown, SliceModal, type SliceSource } from './SliceModal';
+import { BedTypeDropdown, PresetDropdown, SliceModal, type SliceSource } from './SliceModal';
 
 declare global {
   interface Window {
@@ -71,6 +71,7 @@ interface Edits {
   serialized: Record<string, string | string[]>;
   designKeys: string[];
   filaments: PresetRef[];
+  bedType: string | null;
 }
 
 /**
@@ -138,6 +139,7 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
             process_overrides: withEdits.serialized,
             design_overrides: withEdits.designKeys,
             filament_presets: withEdits.filaments,
+            bed_type: withEdits.bedType,
           },
         );
         setStep({ kind: 'slicing', jobId: started.job_id, job: null });
@@ -525,6 +527,7 @@ function EditSettings({
   const [filaments, setFilaments] = useState<(PresetRef | null)[]>(
     edits?.filaments ?? result.filament_presets ?? [],
   );
+  const [bedType, setBedType] = useState<string | null>(edits?.bedType ?? result.bed_type ?? null);
   const process = result.process_preset!;
   const presetsQuery = useQuery({ queryKey: ['slicerPresets'], queryFn: () => api.getSlicerPresets() });
   const printerModelsQuery = useQuery({
@@ -550,6 +553,7 @@ function EditSettings({
 
   return (
     <div className="space-y-4">
+      <BedTypeDropdown value={bedType} onChange={setBedType} />
       {presetsQuery.data && filaments.length > 0 && (
         <div className="space-y-3">
           {filaments.map((ref, i) => (
@@ -594,7 +598,7 @@ function EditSettings({
           className="flex-1 min-w-[8rem]"
           disabled={filaments.some((f) => f == null)}
           onClick={() =>
-            onSave({ values, serialized, designKeys: [...designKeys], filaments: filaments as PresetRef[] })
+            onSave({ values, serialized, designKeys: [...designKeys], filaments: filaments as PresetRef[], bedType })
           }
         >
           {t('makerworld.printFlow.saveAndReslice')}

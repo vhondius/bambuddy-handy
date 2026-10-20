@@ -2152,6 +2152,8 @@ export interface MakerworldPrintResult extends SliceResponse {
   /** The go-to printer preset and the filament preset per slot it sliced with. */
   printer_preset?: PresetRef;
   filament_presets?: PresetRef[];
+  /** The build plate it sliced for (null: the process preset's own). */
+  bed_type?: string | null;
   plates: MakerworldPrintPlate[];
 }
 
@@ -6158,6 +6160,7 @@ export const api = {
       process_overrides: Record<string, string | string[]>;
       design_overrides: string[];
       filament_presets?: PresetRef[];
+      bed_type?: string | null;
     } | null,
   ) =>
     request<MakerworldPrintStart>('/makerworld/print', {

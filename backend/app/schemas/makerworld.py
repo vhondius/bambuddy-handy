@@ -155,3 +155,8 @@ class MakerWorldPrintRequest(BaseModel):
         default=None,
         description="Filament preset per project slot. Omitted: picked from the file's filaments for this printer.",
     )
+    bed_type: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Build plate to slice for. Omitted: the printer's installed plate; null: the process preset's own.",
+    )

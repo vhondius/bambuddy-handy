@@ -579,7 +579,8 @@ async def start_print_flow(
     user_id = cloud_token_user.id if cloud_token_user else None
     printer_id = printer.id
     printer_model = printer.model
-    bed_type = printer.installed_bed_type
+    # "Edit settings" can pick another plate for this print only.
+    bed_type = body.bed_type if "bed_type" in body.model_fields_set else printer.installed_bed_type
 
     async def _run(job_id: int) -> dict:
         # Everything slow happens here, not in the request: on a phone a
@@ -685,6 +686,7 @@ async def start_print_flow(
             "process_preset": process_ref.model_dump(),
             "design_overrides": request.design_overrides or [],
             "printer_preset": printer_ref.model_dump(),
+            "bed_type": bed_type,
             "filament_presets": [f.model_dump() for f in request.filament_presets],
             "plates": [
                 {

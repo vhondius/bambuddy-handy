@@ -486,6 +486,7 @@ class TestPrintRoute:
         assert req.bed_type == "Textured PEI Plate"
         assert req.plate == 0
         result = job["result"]
+        assert result["bed_type"] == "Textured PEI Plate"
         assert result["notice"] is None
         assert result["plates"] == [{"plate": 1, "ams_mapping": [0], "block": None}]
 
@@ -500,11 +501,14 @@ class TestPrintRoute:
             process_overrides={"wall_loops": "4", "enable_support": "1"},
             design_overrides=["sparse_infill_density"],
             filament_presets=[{"source": "standard", "id": "Bambu PETG HF @BBL A1"}],
+            bed_type="Cool Plate",
         )
         assert resp.status_code == 202, resp.text
         job = await self._finish(async_client, resp.json()["job_id"])
         assert job["status"] == "completed", job
         req = state["request"]
+        assert req.bed_type == "Cool Plate"  # this print only, not the installed plate
+        assert job["result"]["bed_type"] == "Cool Plate"
         assert req.process_overrides == {"wall_loops": "4", "enable_support": "1"}
         assert req.design_overrides == ["sparse_infill_density"]
         result = job["result"]
@@ -513,6 +517,14 @@ class TestPrintRoute:
         assert [f.id for f in req.filament_presets] == ["Bambu PETG HF @BBL A1"]
         assert result["filament_presets"] == [{"source": "standard", "id": "Bambu PETG HF @BBL A1"}]
         assert result["printer_preset"] == {"source": "standard", "id": "Bambu Lab A1 0.4 nozzle"}
+
+    @pytest.mark.asyncio
+    async def test_auto_plate_leaves_it_to_the_process_preset(self, async_client, printer, flow):
+        _, state = flow
+        resp = await self._start(async_client, bed_type=None)
+        job = await self._finish(async_client, resp.json()["job_id"])
+        assert state["request"].bed_type is None
+        assert job["result"]["bed_type"] is None
 
     @pytest.mark.asyncio
     async def test_no_matching_profile_arranges_with_goto_presets_and_says_so(
