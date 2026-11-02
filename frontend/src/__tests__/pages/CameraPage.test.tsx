@@ -16,10 +16,8 @@ import { I18nextProvider } from 'react-i18next';
 import i18n from '../../i18n';
 
 // Mock navigator.sendBeacon which isn't available in jsdom
-vi.stubGlobal('navigator', {
-  ...navigator,
-  sendBeacon: vi.fn().mockReturnValue(true),
-});
+// Added to the real navigator: a spread copy would lose prototype getters such as userAgent.
+Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: vi.fn().mockReturnValue(true) });
 
 const mockPrinter = {
   id: 1,
