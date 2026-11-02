@@ -24,4 +24,21 @@
     <string name="set_address_first">Set the Bambuddy address first.</string>
     <string name="no_makerworld_link">No MakerWorld link found in the shared text.</string>
     <string name="blocked_cleartext">Blocked an insecure (http) link to %1$s</string>
+    <string name="notifications_label">Print notifications</string>
+    <string name="notifications_help">Tells you when a print finishes, pauses or fails, or a printer has an error or goes offline. Can be up to about 15 minutes late while the phone is idle.</string>
+    <string name="notifications_denied">Notifications are turned off for this app in Android.</string>
+    <string name="api_key_label">API key (optional)</string>
+    <string name="api_key_help">Only needed if Bambuddy has sign-in turned on. Needs permission to read printer status. Saved with Save.</string>
+    <string name="battery_settings">Battery optimisation settings</string>
+    <string name="battery_help">If notifications stop, exempt Bambuddy Handy here.</string>
+    <string name="channel_watching">Watching printers</string>
+    <string name="channel_alerts">Print updates</string>
+    <string name="notify_watching">Watching your printers</string>
+    <string name="notify_unreachable">Can\'t reach Bambuddy. Still trying.</string>
+    <string name="notify_refused">Bambuddy refused the request. Check the API key in Settings.</string>
+    <string name="notify_finished">%1$s: print finished</string>
+    <string name="notify_failed">%1$s: print failed</string>
+    <string name="notify_paused">%1$s: print paused</string>
+    <string name="notify_error">%1$s: printer error</string>
+    <string name="notify_offline">%1$s: printer offline</string>
 </resources>

@@ -2,6 +2,7 @@ package com.vhondius.bambuddyhandy
 
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.Configuration
@@ -18,6 +19,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.view.ViewCompat
@@ -40,6 +42,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var nav: BottomNavigationView
     private lateinit var emptyBambuddy: View
     private lateinit var settingsTab: View
+    private lateinit var settings: SettingsTab
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        settings.onNotificationPermission(it)
+    }
     /** Where Back and Save on the Settings tab return to. */
     private var previousTab = R.id.tab_makerworld
     private val injectJs by lazy { assets.open("inject.js").bufferedReader().use { it.readText() } }
@@ -98,7 +104,10 @@ class MainActivity : AppCompatActivity() {
         bambuddy.addJavascriptInterface(AppBridge(), "BambuddyHandyApp")
 
         settingsTab = findViewById(R.id.settings_tab)
-        SettingsTab(settingsTab) { base ->
+        settings = SettingsTab(
+            settingsTab,
+            requestNotificationPermission = { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) },
+        ) { base ->
             nav.selectedItemId = previousTab
             applyBase(base)
         }
@@ -169,7 +178,12 @@ class MainActivity : AppCompatActivity() {
         } else {
             applyBase(base)
         }
-        if (savedInstanceState == null) handleShare(intent)
+        if (savedInstanceState == null) {
+            handleShare(intent)
+            handleNotificationTap(intent)
+        }
+        // Back after Android stopped it, or after an update.
+        if (SettingsTab.notificationsOn(this)) StatusPollService.start(this)
     }
 
     /** Use [base] as the Bambuddy address, and open a print that was waiting for one. */
@@ -200,6 +214,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
+        handleNotificationTap(intent)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -347,6 +362,10 @@ class MainActivity : AppCompatActivity() {
         showTab(nav.selectedItemId)
     }
 
+    private fun handleNotificationTap(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_PRINTER, false) == true) nav.selectedItemId = R.id.tab_printer
+    }
+
     private fun handleShare(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
@@ -400,6 +419,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val EXTRA_OPEN_PRINTER = "open_printer"
         private const val MAKERWORLD_HOME = "https://makerworld.com/"
         private val EASE = FastOutSlowInInterpolator()
         private const val STATE_MAKERWORLD = "makerworld"
