@@ -33,6 +33,22 @@
             android:maxLines="1" />
     </com.google.android.material.textfield.TextInputLayout>
 
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:hint="@string/api_key_label"
+        app:endIconMode="password_toggle"
+        app:helperText="@string/api_key_help">
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/api_key"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:imeOptions="actionDone"
+            android:inputType="textPassword"
+            android:maxLines="1" />
+    </com.google.android.material.textfield.TextInputLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -110,21 +126,6 @@
         android:layout_height="wrap_content"
         android:text="@string/notifications_help"
         android:textAppearance="?attr/textAppearanceBodySmall" />
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:hint="@string/api_key_label"
-        app:endIconMode="password_toggle"
-        app:helperText="@string/api_key_help">
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/api_key"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:imeOptions="actionDone"
-            android:inputType="textPassword"
-            android:maxLines="1" />
-    </com.google.android.material.textfield.TextInputLayout>
     <com.google.android.material.button.MaterialButton
         android:id="@+id/battery"
         style="@style/Widget.Material3.Button.TextButton"

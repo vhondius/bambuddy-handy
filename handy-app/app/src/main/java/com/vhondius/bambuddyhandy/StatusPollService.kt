@@ -23,6 +23,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
+/** Why Bambuddy answered 401 or 403 to a status request, as a string resource. */
+fun authProblem(code: Int, hasKey: Boolean): Int = when {
+    !hasKey -> R.string.auth_key_needed
+    code == 403 -> R.string.auth_key_no_permission
+    else -> R.string.auth_key_invalid
+}
+
 /**
  * Checks Bambuddy's printer status and notifies on changes. The foreground
  * service keeps the process alive; each check is woken by an alarm and holds a
@@ -90,7 +97,7 @@ class StatusPollService : Service() {
             saveSnapshots(current)
             getString(R.string.notify_watching)
         } catch (e: AuthRefused) {
-            getString(R.string.notify_refused)
+            getString(authProblem(e.code, SettingsTab.apiKey(this) != null))
         } catch (e: IOException) {
             // Away from home with no VPN: keep trying quietly and keep the state.
             getString(R.string.notify_unreachable)
@@ -137,7 +144,7 @@ class StatusPollService : Service() {
         try {
             when (val code = conn.responseCode) {
                 200 -> return conn.inputStream.bufferedReader().use { it.readText() }
-                401, 403 -> throw AuthRefused()
+                401, 403 -> throw AuthRefused(code)
                 else -> throw IOException("HTTP $code")
             }
         } finally {
@@ -145,7 +152,7 @@ class StatusPollService : Service() {
         }
     }
 
-    private class AuthRefused : IOException()
+    private class AuthRefused(val code: Int) : IOException()
 
     private fun loadSnapshots(): Map<Int, PrinterSnapshot> {
         val raw = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_SNAPSHOTS, null) ?: return emptyMap()

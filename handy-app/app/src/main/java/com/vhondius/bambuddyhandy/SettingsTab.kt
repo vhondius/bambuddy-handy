@@ -58,6 +58,8 @@ class SettingsTab(
                 .putString(KEY_API_KEY, apiKeyInput.text.toString().trim())
                 .apply()
             Toast.makeText(context, R.string.saved, Toast.LENGTH_SHORT).show()
+            // Check straight away, so a fixed address or key shows at once.
+            if (notificationsOn(context)) StatusPollService.start(context)
             result.text = ""
             onSaved(url)
         }
@@ -73,12 +75,13 @@ class SettingsTab(
             result.setText(R.string.testing)
             Thread {
                 val error = checkHealth(url)
+                val status = if (error == null) checkStatusAccess(url, apiKeyInput.text.toString().trim()) else null
                 root.post {
                     test.isEnabled = true
-                    result.text = if (error == null) {
-                        context.getString(R.string.test_ok)
-                    } else {
-                        context.getString(R.string.test_failed, error)
+                    result.text = when {
+                        error != null -> context.getString(R.string.test_failed, error)
+                        status != null -> context.getString(status)
+                        else -> context.getString(R.string.test_ok)
                     }
                 }
             }.start()
@@ -88,7 +91,10 @@ class SettingsTab(
         notifications.setOnCheckedChangeListener { _, checked ->
             when {
                 !checked -> setNotifications(false)
-                hasNotificationPermission() -> setNotifications(true)
+                hasNotificationPermission() -> {
+                    prefs(context).edit().putString(KEY_API_KEY, apiKeyInput.text.toString().trim()).apply()
+                    setNotifications(true)
+                }
                 else -> requestNotificationPermission()
             }
         }
@@ -117,6 +123,25 @@ class SettingsTab(
 
     private fun hasNotificationPermission() = Build.VERSION.SDK_INT < 33 ||
         context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    /** What the notifications would get from Bambuddy with [key], as a string resource; null when it can't tell. */
+    private fun checkStatusAccess(base: String, key: String): Int? = try {
+        val conn = URL("$base/api/v1/printers/").openConnection() as HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        if (key.isNotEmpty()) conn.setRequestProperty("X-API-Key", key)
+        try {
+            when (val code = conn.responseCode) {
+                200 -> R.string.test_ok_key
+                401, 403 -> authProblem(code, key.isNotEmpty())
+                else -> null
+            }
+        } finally {
+            conn.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
 
     /** Null when Bambuddy answered its health check, else what went wrong. */
     private fun checkHealth(base: String): String? = try {
