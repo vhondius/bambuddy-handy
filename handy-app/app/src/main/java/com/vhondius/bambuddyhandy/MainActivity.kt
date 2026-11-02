@@ -28,6 +28,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.snackbar.Snackbar
 import java.io.ByteArrayInputStream
 import java.net.URLEncoder
 
@@ -181,6 +182,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             handleShare(intent)
             handleNotificationTap(intent)
+            checkForUpdate()
         }
         // Back after Android stopped it, or after an update.
         if (SettingsTab.notificationsOn(this)) StatusPollService.start(this)
@@ -362,6 +364,26 @@ class MainActivity : AppCompatActivity() {
         showTab(nav.selectedItemId)
     }
 
+    /** On a fresh open, offer a newer release from GitHub. Quiet when there's none or it can't tell. */
+    private fun checkForUpdate() {
+        val current = packageManager.getPackageInfo(packageName, 0).versionName ?: return
+        Thread {
+            val update = fetchAppUpdate(current) ?: return@Thread
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                Snackbar.make(nav, getString(R.string.update_available, update.version), UPDATE_BAR_MS)
+                    .setAnchorView(nav)
+                    .setAction(R.string.update_download) {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.url)))
+                        } catch (_: ActivityNotFoundException) {
+                        }
+                    }
+                    .show()
+            }
+        }.start()
+    }
+
     private fun handleNotificationTap(intent: Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_PRINTER, false) == true) nav.selectedItemId = R.id.tab_printer
     }
@@ -420,6 +442,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_OPEN_PRINTER = "open_printer"
+        private const val UPDATE_BAR_MS = 10_000
         private const val MAKERWORLD_HOME = "https://makerworld.com/"
         private val EASE = FastOutSlowInInterpolator()
         private const val STATE_MAKERWORLD = "makerworld"

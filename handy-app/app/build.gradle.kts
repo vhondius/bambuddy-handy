@@ -39,4 +39,6 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     testImplementation("junit:junit:4.13.2")
+    // Android's own org.json is only a stub in JVM tests.
+    testImplementation("org.json:json:20250517")
 }

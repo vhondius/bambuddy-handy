@@ -31,6 +31,10 @@ in the visible tab, pull down to refresh.
    browser, e.g. `http://192.168.1.10:8000`, tap **Test connection**, then
    **Save**. Change it later on the **Settings** tab.
 
+On a fresh open the app asks GitHub for the latest release and offers a Download
+button when its tag is a higher version than the app's `versionName`. Tag releases
+with plain numbers (`v1.2.0`), or the app won't see them.
+
 Updates install over the old version and keep your logins as long as every
 build is signed with the same key. Put a keystore at `app/handy.keystore`
 (alias `handy`, password `android`; it is git-ignored so the key stays

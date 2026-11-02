@@ -41,4 +41,6 @@
     <string name="notify_paused">%1$s: print paused</string>
     <string name="notify_error">%1$s: printer error</string>
     <string name="notify_offline">%1$s: printer offline</string>
+    <string name="update_available">Version %1$s is available</string>
+    <string name="update_download">Download</string>
 </resources>
