@@ -637,6 +637,16 @@ class TestPrintRoute:
         flow[0].download.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_goto_preset_from_unusable_tier_asks_for_another(self, async_client, db_session, printer, flow):
+        # No preferred_slicer set means Bambu Studio, which can't use Orca Cloud.
+        printer.goto_process_preset_source = "orca_cloud"
+        await db_session.commit()
+        resp = await self._start(async_client)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "goto_profile_missing"
+        flow[0].download.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_paid_model_and_expired_token_say_so(self, async_client, printer, flow):
         from backend.app.services.model_providers.makerworld.errors import (
             MakerWorldAuthError,

@@ -462,6 +462,17 @@ async def _resolve_slicer_api_url(db: AsyncSession) -> str | None:
     return url or None
 
 
+async def unusable_cloud_tier(db: AsyncSession) -> str | None:
+    """The cloud tier the active slicer can't use: Bambu Cloud presets fail on
+    the OrcaSlicer sidecar, and Orca Cloud presets are no use to Bambu Studio.
+    Unset means Bambu Studio, as in ``_resolve_slicer_api_url``; an unknown
+    value hides nothing."""
+    from backend.app.api.routes.settings import get_setting
+
+    preferred = (await get_setting(db, "preferred_slicer")) or "bambu_studio"
+    return {"orcaslicer": "cloud", "bambu_studio": "orca_cloud"}.get(preferred)
+
+
 def _enrich_cloud_metadata(
     orca_cloud: dict[str, list[UnifiedPreset]],
     cloud: dict[str, list[UnifiedPreset]],
@@ -657,6 +668,14 @@ async def list_unified_presets(
     standard = await _fetch_bundled_presets(db, refresh=refresh)
 
     orca_cloud, cloud, local, standard = _enrich_cloud_metadata(orca_cloud, cloud, local, standard)
+
+    # Hidden after the enrich so a shared name can still lend its metadata.
+    # `not_authenticated` keeps the SliceModal's status banner silent.
+    hidden = await unusable_cloud_tier(db)
+    if hidden == "cloud":
+        cloud, cloud_status = _empty_slots(), "not_authenticated"
+    elif hidden == "orca_cloud":
+        orca_cloud, orca_cloud_status = _empty_slots(), "not_authenticated"
 
     return UnifiedPresetsResponse(
         orca_cloud=UnifiedPresetsBySlot(**orca_cloud),

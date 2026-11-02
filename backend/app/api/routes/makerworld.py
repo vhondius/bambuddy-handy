@@ -518,7 +518,11 @@ async def start_print_flow(
     from pathlib import Path
 
     from backend.app.api.routes.library import slice_and_persist
-    from backend.app.api.routes.slicer_presets import _fetch_bundled_presets, _resolve_slicer_api_url
+    from backend.app.api.routes.slicer_presets import (
+        _fetch_bundled_presets,
+        _resolve_slicer_api_url,
+        unusable_cloud_tier,
+    )
     from backend.app.core.config import settings as app_settings
     from backend.app.core.database import async_session
     from backend.app.services.makerworld_print import (
@@ -558,7 +562,9 @@ async def start_print_flow(
 
     printer = await _pick_printer(db, body.printer_id)
     presets = goto_presets(printer)
-    if presets is None:
+    # A go-to preset saved from a tier this slicer can't use has to be re-picked.
+    hidden_tier = await unusable_cloud_tier(db)
+    if presets is None or any(ref.source == hidden_tier for ref in presets):
         raise HTTPException(
             status_code=409,
             detail={

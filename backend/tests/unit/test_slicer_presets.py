@@ -32,6 +32,41 @@ def _slot(items: list[tuple[str, str, str]]) -> dict[str, list[UnifiedPreset]]:
     }
 
 
+class TestUnusableCloudTierHidden:
+    """Each slicer sees only the cloud tier it can actually use."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("preferred", "cloud_names", "orca_names"),
+        [
+            ("orcaslicer", [], ["Orca"]),
+            ("bambu_studio", ["Bambu"], []),
+            (None, ["Bambu"], []),
+            ("something_else", ["Bambu"], ["Orca"]),
+        ],
+    )
+    async def test_list_hides_the_other_slicers_cloud(self, preferred, cloud_names, orca_names):
+        with (
+            patch.object(sp, "_fetch_cloud_presets", AsyncMock(return_value=(_slot([("b", "Bambu", "cloud")]), "ok"))),
+            patch.object(
+                sp, "_fetch_orca_cloud_presets", AsyncMock(return_value=(_slot([("o", "Orca", "orca_cloud")]), "ok"))
+            ),
+            patch.object(sp, "_fetch_local_presets", AsyncMock(return_value=_slot([("1", "Mine", "local")]))),
+            patch.object(sp, "_fetch_bundled_presets", AsyncMock(return_value=_slot([("s", "Std", "standard")]))),
+            patch("backend.app.api.routes.settings.get_setting", AsyncMock(return_value=preferred)),
+        ):
+            result = await sp.list_unified_presets(
+                db=MagicMock(), current_user=None, api_key_cloud_owner=None, refresh=False
+            )
+
+        assert [p.name for p in result.cloud.printer] == cloud_names
+        assert [p.name for p in result.orca_cloud.printer] == orca_names
+        assert result.cloud_status == ("ok" if cloud_names else "not_authenticated")
+        assert result.orca_cloud_status == ("ok" if orca_names else "not_authenticated")
+        assert [p.name for p in result.local.printer] == ["Mine"]
+        assert [p.name for p in result.standard.printer] == ["Std"]
+
+
 class TestEnrichCloudMetadata:
     """No cross-tier dedup — every tier's full list comes back; Bambu Cloud
     filament metadata is enriched from same-named entries in other tiers."""
