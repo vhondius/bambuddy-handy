@@ -6,6 +6,7 @@ import { ArrowLeft, Loader2, Printer as PrinterIcon, X } from 'lucide-react';
 import {
   api,
   ApiError,
+  type MakerworldPlateObject,
   type MakerworldPrintResult,
   type PresetRef,
   type SliceJobState,
@@ -76,6 +77,8 @@ interface Edits {
   filaments: (PresetRef | null)[];
   bedType: string | null;
   slotTrays?: (number | null)[];
+  /** Objects left out, as "object_id:instance_id". */
+  excludedObjects?: string[];
 }
 
 /** Tray per project slot from the preview's picks, per plate. The plate on
@@ -160,6 +163,7 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
             filament_presets: withEdits.filaments,
             bed_type: withEdits.bedType,
             ...(withEdits.slotTrays?.length ? { slot_trays: withEdits.slotTrays } : {}),
+            ...(withEdits.excludedObjects?.length ? { excluded_objects: withEdits.excludedObjects } : {}),
           },
         );
         setStep({ kind: 'slicing', jobId: started.job_id, job: null });
@@ -305,6 +309,7 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
           {step.kind === 'editSettings' && (
             <EditSettings
               result={step.result}
+              plate={step.result.plates[plateIdx]?.plate ?? 1}
               edits={edits}
               onCancel={() => setStep({ kind: 'preview', result: step.result })}
               onSave={(next) => {
@@ -336,6 +341,7 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
                   bedType: edits ? edits.bedType : (step.result.bed_type ?? null),
                   filaments,
                   slotTrays: slotTraysFromPicks(allPicks, plate),
+                  excludedObjects: edits?.excludedObjects ?? step.result.excluded_objects,
                 };
                 setTrayPicks(allPicks);
                 setEdits(next);
@@ -595,11 +601,13 @@ function Preview({
  */
 function EditSettings({
   result,
+  plate,
   edits,
   onCancel,
   onSave,
 }: {
   result: MakerworldPrintResult;
+  plate: number;
   edits: Edits | null;
   onCancel: () => void;
   onSave: (edits: Edits) => void;
@@ -615,6 +623,11 @@ function EditSettings({
     (edits?.filaments ?? result.filament_presets ?? []).map((f, i) => f ?? result.filament_presets?.[i] ?? null),
   );
   const [bedType, setBedType] = useState<string | null>(edits?.bedType ?? result.bed_type ?? null);
+  const [pickingObjects, setPickingObjects] = useState(false);
+  const excluded = edits?.excludedObjects ?? result.excluded_objects ?? [];
+  const plateObjects = (result.objects ?? []).filter((o) => o.plate === plate);
+  const save = (excludedObjects: string[]) =>
+    onSave({ values, serialized, designKeys: [...designKeys], filaments, bedType, excludedObjects });
   const process = result.process_preset!;
   const presetsQuery = useQuery({ queryKey: ['slicerPresets'], queryFn: () => api.getSlicerPresets() });
   const printerModelsQuery = useQuery({
@@ -638,8 +651,28 @@ function EditSettings({
     queryFn: () => api.getLibraryFilePlates(result.source_library_file_id),
   });
 
+  if (pickingObjects) {
+    return (
+      <ObjectChecklist
+        objects={plateObjects}
+        excluded={excluded}
+        onCancel={() => setPickingObjects(false)}
+        onDone={(next) => {
+          // Only a changed selection is worth a re-slice.
+          if (next.length === excluded.length && next.every((key) => excluded.includes(key))) setPickingObjects(false);
+          else save(next);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {plateObjects.length >= 2 && (
+        <Button variant="secondary" className="w-full" onClick={() => setPickingObjects(true)}>
+          {t('makerworld.printFlow.deselectObjects')}
+        </Button>
+      )}
       <BedTypeDropdown value={bedType} onChange={setBedType} />
       {presetsQuery.data && filaments.length > 0 && (
         <div className="space-y-3">
@@ -684,11 +717,78 @@ function EditSettings({
         <Button
           className="flex-1 min-w-[8rem]"
           disabled={filaments.some((f) => f == null)}
-          onClick={() =>
-            onSave({ values, serialized, designKeys: [...designKeys], filaments, bedType })
-          }
+          onClick={() => save(excluded)}
         >
           {t('makerworld.printFlow.saveAndReslice')}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Tick list of one plate's objects. Unticked ones are left out of the slice;
+ *  the last one stays, because the slicer rejects an empty plate. */
+function ObjectChecklist({
+  objects,
+  excluded,
+  onCancel,
+  onDone,
+}: {
+  objects: MakerworldPlateObject[];
+  excluded: string[];
+  onCancel: () => void;
+  onDone: (excluded: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const keyOf = (o: MakerworldPlateObject) => `${o.object_id}:${o.instance_id}`;
+  const [unticked, setUnticked] = useState(() => new Set(excluded));
+  const ticked = objects.filter((o) => !unticked.has(keyOf(o)));
+  const totals = new Map<string, number>();
+  for (const o of objects) totals.set(o.name, (totals.get(o.name) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-medium text-white">{t('makerworld.printFlow.deselectObjects')}</h3>
+        <p className="text-sm text-bambu-gray mt-1">{t('makerworld.printFlow.objectsHint')}</p>
+      </div>
+      <ul className="space-y-1">
+        {objects.map((o) => {
+          const key = keyOf(o);
+          const isTicked = !unticked.has(key);
+          const copy = (seen.get(o.name) ?? 0) + 1;
+          seen.set(o.name, copy);
+          return (
+            <li key={key}>
+              <label className="flex items-center gap-3 p-2 rounded-lg bg-bambu-dark text-sm text-white cursor-pointer has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
+                <input
+                  type="checkbox"
+                  className="accent-bambu-green w-4 h-4 shrink-0"
+                  checked={isTicked}
+                  disabled={isTicked && ticked.length === 1}
+                  onChange={(e) =>
+                    setUnticked((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.delete(key);
+                      else next.add(key);
+                      return next;
+                    })
+                  }
+                />
+                <span className="min-w-0 break-words">
+                  {(totals.get(o.name) ?? 0) > 1 ? `${o.name} #${copy}` : o.name}
+                </span>
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" className="flex-1 min-w-[8rem]" onClick={onCancel}>
+          {t('common.cancel')}
+        </Button>
+        <Button className="flex-1 min-w-[8rem]" onClick={() => onDone([...unticked])}>
+          {t('makerworld.printFlow.objectsDone')}
         </Button>
       </div>
     </div>

@@ -670,6 +670,13 @@ class TestPrintRoute:
         assert job["result"]["plates"][0]["block"] is None
 
     @pytest.mark.asyncio
+    async def test_excluding_an_object_the_file_lacks_fails_the_job(self, async_client, printer, flow):
+        resp = await self._start(async_client, excluded_objects=["99:0"])
+        job = await self._finish(async_client, resp.json()["job_id"])
+        assert job["status"] == "failed"
+        assert "99:0" in job["error_detail"]
+
+    @pytest.mark.asyncio
     async def test_slicer_down_is_reported_before_anything_happens(self, async_client, printer, flow):
         from backend.app.services.slicer_api import SlicerApiUnavailableError
 

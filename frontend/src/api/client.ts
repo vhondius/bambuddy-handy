@@ -2123,6 +2123,13 @@ export type MakerworldPrintBlock =
 
 /** One sliced plate in a MakerWorld print-flow result: the AMS mapping the
  *  queue would use, or why it must go to the Print dialog instead. */
+export interface MakerworldPlateObject {
+  plate: number;
+  object_id: string;
+  instance_id: string;
+  name: string;
+}
+
 export interface MakerworldPrintPlate {
   plate: number;
   ams_mapping: number[] | null;
@@ -2152,6 +2159,9 @@ export interface MakerworldPrintResult extends SliceResponse {
   filament_presets?: PresetRef[];
   /** The build plate it sliced for (null: the process preset's own). */
   bed_type?: string | null;
+  /** Every object in the source file, and the ones this slice left out. */
+  objects?: MakerworldPlateObject[];
+  excluded_objects?: string[];
   plates: MakerworldPrintPlate[];
 }
 
@@ -6162,6 +6172,8 @@ export const api = {
       bed_type?: string | null;
       /** Global AMS tray chosen per project slot. */
       slot_trays?: (number | null)[];
+      /** Objects to leave out, as "object_id:instance_id". */
+      excluded_objects?: string[];
     } | null,
   ) =>
     request<MakerworldPrintStart>('/makerworld/print', {

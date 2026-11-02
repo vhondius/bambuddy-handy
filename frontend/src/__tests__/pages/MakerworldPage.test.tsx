@@ -373,11 +373,13 @@ describe('MakerworldPage /makerworld?url= deep link (print flow)', () => {
   const MODEL = 'https://makerworld.com/en/models/1400373#profileId-298919564';
   let printNotice: string | null = null;
   let printBlock: string | null = null;
+  let printObjects: Array<Record<string, unknown>> = [];
 
   afterEach(() => {
     window.history.replaceState(null, '', '/');
     printNotice = null;
     printBlock = null;
+    printObjects = [];
   });
 
   function usePrintFlowHandlers(printBodies: Array<Record<string, unknown>>) {
@@ -417,6 +419,7 @@ describe('MakerworldPage /makerworld?url= deep link (print flow)', () => {
             design_overrides: ['wall_loops'],
             printer_preset: { source: 'standard', id: 'Bambu Lab X2D 0.4 nozzle' },
             filament_presets: [{ source: 'standard', id: 'Bambu PLA Basic @BBL X2D' }],
+            objects: printObjects,
             plates: [{ plate: 1, ams_mapping: [0], block: printBlock }],
           },
         }),
@@ -743,6 +746,67 @@ describe('MakerworldPage /makerworld?url= deep link (print flow)', () => {
       render(<MakerworldPage />);
 
       await waitFor(() => expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled());
+    });
+  });
+
+  describe('deselecting objects in Edit settings', () => {
+    const object = (id: string, name: string) => ({ plate: 1, object_id: id, instance_id: '0', name });
+
+    async function openChecklist() {
+      window.history.replaceState(null, '', `/makerworld?url=${encodeURIComponent(MODEL)}`);
+      render(<MakerworldPage />);
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: 'Edit settings' }));
+      await user.click(await screen.findByRole('button', { name: 'Deselect objects' }));
+      return user;
+    }
+
+    it('re-slices without the unticked object', async () => {
+      printObjects = [object('2', 'Benchy'), object('4', 'Benchy'), object('6', 'Cube')];
+      const bodies: Array<Record<string, unknown>> = [];
+      usePrintFlowHandlers(bodies);
+      const user = await openChecklist();
+
+      expect(screen.getByRole('checkbox', { name: 'Cube' })).toBeChecked();
+      await user.click(screen.getByRole('checkbox', { name: 'Benchy #2' }));
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+
+      await waitFor(() => expect(bodies).toHaveLength(2));
+      expect(bodies[1].excluded_objects).toEqual(['4:0']);
+    });
+
+    it('does not re-slice when nothing changed', async () => {
+      printObjects = [object('2', 'Benchy'), object('6', 'Cube')];
+      const bodies: Array<Record<string, unknown>> = [];
+      usePrintFlowHandlers(bodies);
+      const user = await openChecklist();
+
+      await user.click(screen.getByRole('button', { name: 'Done' }));
+
+      expect(await screen.findByRole('button', { name: 'Deselect objects' })).toBeInTheDocument();
+      expect(bodies).toHaveLength(1);
+    });
+
+    it('keeps the last object ticked', async () => {
+      printObjects = [object('2', 'Benchy'), object('6', 'Cube')];
+      usePrintFlowHandlers([]);
+      const user = await openChecklist();
+
+      await user.click(screen.getByRole('checkbox', { name: 'Benchy' }));
+
+      expect(screen.getByRole('checkbox', { name: 'Cube' })).toBeDisabled();
+    });
+
+    it('hides the button on a plate with one object', async () => {
+      printObjects = [object('2', 'Benchy')];
+      usePrintFlowHandlers([]);
+      window.history.replaceState(null, '', `/makerworld?url=${encodeURIComponent(MODEL)}`);
+      render(<MakerworldPage />);
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: 'Edit settings' }));
+
+      await screen.findByLabelText(/^Layer height/);
+      expect(screen.queryByRole('button', { name: 'Deselect objects' })).not.toBeInTheDocument();
     });
   });
 

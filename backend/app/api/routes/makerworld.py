@@ -540,6 +540,7 @@ async def start_print_flow(
     from backend.app.services.printer_manager import printer_manager
     from backend.app.services.slice_dispatch import http_exception_to_job_error, slice_dispatch
     from backend.app.services.slicer_api import SlicerApiError, SlicerApiService
+    from backend.app.utils.threemf_tools import exclude_objects, list_plate_objects
 
     provider = _provider_for_url(body.url)
     current_user = await _authorize_for_provider(provider, provider.import_permission, credentials, x_api_key)
@@ -633,6 +634,10 @@ async def start_print_flow(
                 matched = False  # made for this model, but for another nozzle
             model_path = Path(app_settings.base_dir) / source.file_path
             model_bytes = model_path.read_bytes()
+            try:
+                slice_bytes = exclude_objects(model_bytes, body.excluded_objects or [])
+            except ValueError as exc:
+                raise http_exception_to_job_error(HTTPException(status_code=400, detail=str(exc))) from exc
             handover = {
                 "printer_id": printer_id,
                 "source_library_file_id": source.id,
@@ -675,7 +680,7 @@ async def start_print_flow(
             try:
                 sliced = await slice_and_persist(
                     task_db,
-                    model_bytes=model_bytes,
+                    model_bytes=slice_bytes,
                     model_filename=source.filename,
                     folder_id=source.folder_id,
                     extra_metadata={"sliced_from_library_file_id": source.id, PRINT_FLOW_MARK: True},
@@ -705,6 +710,9 @@ async def start_print_flow(
             "printer_preset": printer_ref.model_dump(),
             "bed_type": bed_type,
             "filament_presets": [f.model_dump() for f in request.filament_presets],
+            # From the source file, so a left-out object can be ticked again.
+            "objects": list_plate_objects(model_bytes),
+            "excluded_objects": body.excluded_objects or [],
             "plates": [
                 {
                     "plate": p["plate"],

@@ -1912,3 +1912,124 @@ def sanitize_project_settings_sentinels(zip_bytes: bytes) -> bytes:
             return dst.getvalue()
     except (zipfile.BadZipFile, OSError):
         return zip_bytes
+
+
+MODEL_SETTINGS_PATH = "Metadata/model_settings.config"
+BUILD_MODEL_PATH = "3D/3dmodel.model"
+_MODEL_INSTANCE_RE = re.compile(r"\s*<model_instance>.*?</model_instance>", re.S)
+_ASSEMBLE_ITEM_RE = re.compile(r"\s*<assemble_item\b[^>]*/>")
+_BUILD_ITEM_RE = re.compile(r"\s*<item\b[^>]*/>")
+_PLATE_PICTURES = ("plate_{}.png", "plate_{}_small.png", "plate_no_light_{}.png", "top_{}.png", "pick_{}.png")
+
+
+def list_plate_objects(zip_bytes: bytes) -> list[dict]:
+    """Every object placed on a plate of a project 3MF, one entry per copy:
+    ``{plate, object_id, instance_id, name}``. A file without a readable
+    ``model_settings.config`` has none."""
+    from io import BytesIO
+
+    try:
+        with zipfile.ZipFile(BytesIO(zip_bytes)) as zf:
+            root = ET.fromstring(zf.read(MODEL_SETTINGS_PATH))
+    except (zipfile.BadZipFile, KeyError, OSError, ET.ParseError):
+        return []
+
+    def meta(node: XmlElement, key: str) -> str | None:
+        found = node.find(f"metadata[@key='{key}']")
+        return found.get("value") if found is not None else None
+
+    names = {o.get("id"): meta(o, "name") for o in root.findall("object")}
+    objects = []
+    for plate in root.findall("plate"):
+        plate_id = meta(plate, "plater_id")
+        for instance in plate.findall("model_instance"):
+            object_id, instance_id = meta(instance, "object_id"), meta(instance, "instance_id")
+            if plate_id and plate_id.isdigit() and object_id and instance_id:
+                objects.append(
+                    {
+                        "plate": int(plate_id),
+                        "object_id": object_id,
+                        "instance_id": instance_id,
+                        "name": names.get(object_id) or f"Object {object_id}",
+                    }
+                )
+    return objects
+
+
+def exclude_objects(zip_bytes: bytes, excluded: list[str]) -> bytes:
+    """Remove objects (``"object_id:instance_id"``) from a project 3MF so the
+    slicer leaves them out: the build item that places each one, its plate
+    entry and its assemble entry. Plate definitions stay, because the CLI
+    needs them. Other zip entries keep their content, apart from the affected
+    plates' pictures: the slicer would copy those into its output, so the
+    preview would still show the object, and without them they're rendered
+    from the G-code.
+
+    Raises ``ValueError`` for an object the file doesn't have (the list comes
+    from the client) and for emptying a plate, which the slicer rejects.
+    """
+    from io import BytesIO
+
+    wanted = set(excluded)
+    if not wanted:
+        return zip_bytes
+    objects = list_plate_objects(zip_bytes)
+
+    def key(o: dict) -> str:
+        return f"{o['object_id']}:{o['instance_id']}"
+
+    unknown = wanted - {key(o) for o in objects}
+    if unknown:
+        raise ValueError(f"No such object in this file: {', '.join(sorted(unknown))}")
+    plates = {o["plate"] for o in objects if key(o) in wanted}
+    for plate in plates:
+        if all(key(o) in wanted for o in objects if o["plate"] == plate):
+            raise ValueError(f"Plate {plate} needs at least one object")
+
+    def attribute(text: str, name: str) -> str | None:
+        found = re.search(rf'\b{name}="([^"]*)"', text)
+        return found.group(1) if found else None
+
+    def instance_key(block: re.Match) -> str:
+        found = re.findall(r'key="(object_id|instance_id)" value="([^"]*)"', block.group(0))
+        values = dict(found)
+        return f"{values.get('object_id')}:{values.get('instance_id')}"
+
+    # A build item names its object only; copies sharing an object id are
+    # placed in instance order.
+    seen: dict[str, int] = {}
+    removed_items: set[str] = set()
+
+    def drop_item(item: re.Match) -> str:
+        object_id = attribute(item.group(0), "objectid") or ""
+        item_key = f"{object_id}:{seen.get(object_id, 0)}"
+        seen[object_id] = seen.get(object_id, 0) + 1
+        if item_key in wanted:
+            removed_items.add(item_key)
+            return ""
+        return item.group(0)
+
+    def drop_assemble(item: re.Match) -> str:
+        text = item.group(0)
+        return "" if f"{attribute(text, 'object_id')}:{attribute(text, 'instance_id')}" in wanted else text
+
+    pictures = {f"Metadata/{name.format(plate)}" for plate in plates for name in _PLATE_PICTURES}
+    with zipfile.ZipFile(BytesIO(zip_bytes)) as zin:
+        model = _BUILD_ITEM_RE.sub(drop_item, zin.read(BUILD_MODEL_PATH).decode("utf-8"))
+        if removed_items != wanted:
+            raise ValueError(f"Could not find these objects in the model: {', '.join(sorted(wanted - removed_items))}")
+        settings = zin.read(MODEL_SETTINGS_PATH).decode("utf-8")
+        settings = _MODEL_INSTANCE_RE.sub(lambda m: "" if instance_key(m) in wanted else m.group(0), settings)
+        settings = _ASSEMBLE_ITEM_RE.sub(drop_assemble, settings)
+        dst = BytesIO()
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename in pictures:
+                    continue
+                if item.filename == BUILD_MODEL_PATH:
+                    zout.writestr(item, model)
+                elif item.filename == MODEL_SETTINGS_PATH:
+                    zout.writestr(item, settings)
+                else:
+                    zout.writestr(item, zin.read(item.filename))
+    return dst.getvalue()

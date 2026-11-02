@@ -159,6 +159,10 @@ class MakerWorldPrintRequest(BaseModel):
         default=None,
         description="Global AMS tray chosen per project slot. Null: matched automatically.",
     )
+    excluded_objects: list[str] | None = Field(
+        default=None,
+        description='Objects to leave out, as "object_id:instance_id". Checked against the file before slicing.',
+    )
     bed_type: str | None = Field(
         default=None,
         max_length=64,
