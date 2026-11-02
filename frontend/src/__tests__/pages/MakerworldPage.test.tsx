@@ -646,15 +646,104 @@ describe('MakerworldPage /makerworld?url= deep link (print flow)', () => {
     expect(screen.getByRole('button', { name: 'Print' })).toBeInTheDocument();
   });
 
-  it('hands an ambiguous AMS match to the Print dialog instead of printing', async () => {
-    printBlock = 'filament_ambiguous';
+  it('hands a plate needing more filaments than are loaded to the Print dialog', async () => {
+    printBlock = 'too_many_filaments';
     usePrintFlowHandlers([]);
     window.history.replaceState(null, '', `/makerworld?url=${encodeURIComponent(MODEL)}`);
     render(<MakerworldPage />);
 
     expect(await screen.findByRole('button', { name: 'Open Print dialog' })).toBeInTheDocument();
-    expect(screen.getByText(/same material in another colour/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Print' })).not.toBeInTheDocument();
+  });
+
+  describe('choosing AMS trays on the preview', () => {
+    const tray = (id: number, type: string, color: string, idx: string) => ({
+      id,
+      tray_type: type,
+      tray_color: color,
+      tray_info_idx: idx,
+      remain: 50,
+    });
+
+    function useTrays(trays: ReturnType<typeof tray>[]) {
+      server.use(
+        http.get('*/printers/3/status', () =>
+          HttpResponse.json({
+            connected: true,
+            ams: [{ id: 0, humidity: 3, temp: 25, tray: trays }],
+            vt_tray: [],
+          }),
+        ),
+        http.get('*/library/files/8/filament-requirements', () =>
+          HttpResponse.json({
+            file_id: 8,
+            filename: 'seed.gcode.3mf',
+            filaments: [
+              { slot_id: 1, type: 'PLA', color: '#FF0000', used_grams: 12, used_meters: 4, tray_info_idx: 'GFA00' },
+            ],
+          }),
+        ),
+      );
+    }
+
+    const TRAYS = [
+      tray(0, 'PLA', 'FF0000FF', 'GFA00'),
+      tray(1, 'PLA', '0000FFFF', 'GFA00'),
+      tray(2, 'PETG', '000000FF', 'GFG02'),
+    ];
+
+    async function pickTray(user: ReturnType<typeof userEvent.setup>, optionName: RegExp) {
+      await user.click(await screen.findByRole('combobox', { name: /PLA/ }));
+      await user.click(await screen.findByRole('option', { name: optionName }));
+    }
+
+    it('queues another tray of the same filament without re-slicing', async () => {
+      const bodies: Array<Record<string, unknown>> = [];
+      const queued: Array<Record<string, unknown>> = [];
+      usePrintFlowHandlers(bodies);
+      useTrays(TRAYS);
+      server.use(
+        http.post('*/queue/', async ({ request }) => {
+          queued.push((await request.json()) as Record<string, unknown>);
+          return HttpResponse.json({ id: 1 });
+        }),
+      );
+      window.history.replaceState(null, '', `/makerworld?url=${encodeURIComponent(MODEL)}`);
+      render(<MakerworldPage />);
+
+      const user = userEvent.setup();
+      await screen.findByRole('combobox', { name: /PLA/ });
+      await pickTray(user, /A2/);
+      await user.click(screen.getByRole('button', { name: 'Print' }));
+
+      await waitFor(() => expect(queued).toHaveLength(1));
+      expect(queued[0].ams_mapping).toEqual([1]);
+      expect(bodies).toHaveLength(1);
+    });
+
+    it('re-slices for another material and leaves its preset to the backend', async () => {
+      const bodies: Array<Record<string, unknown>> = [];
+      usePrintFlowHandlers(bodies);
+      useTrays(TRAYS);
+      window.history.replaceState(null, '', `/makerworld?url=${encodeURIComponent(MODEL)}`);
+      render(<MakerworldPage />);
+
+      const user = userEvent.setup();
+      await pickTray(user, /PETG/);
+
+      await waitFor(() => expect(bodies).toHaveLength(2));
+      expect(bodies[1].slot_trays).toEqual([2]);
+      expect(bodies[1].filament_presets).toEqual([null]);
+    });
+
+    it('keeps Print disabled while a filament has no tray', async () => {
+      usePrintFlowHandlers([]);
+      useTrays([]);
+      window.history.replaceState(null, '', `/makerworld?url=${encodeURIComponent(MODEL)}`);
+      render(<MakerworldPage />);
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled());
+    });
   });
 
   it('asks for a go-to print profile when the printer has none', async () => {

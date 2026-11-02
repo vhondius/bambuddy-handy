@@ -316,21 +316,76 @@ class TestCheckBlocks:
     RED_TRAY = {"global_tray_id": 0, "type": "PLA", "color": "FF0000FF", "tray_info_idx": "GFA00"}
     BLUE_TRAY = {"global_tray_id": 1, "type": "PLA", "color": "0000FFFF", "tray_info_idx": "GFA00"}
 
-    def test_clean_match(self):
-        assert check_blocks([self.RED], [self.RED_TRAY, self.BLUE_TRAY], [0]) is None
+    def test_enough_trays(self):
+        assert check_blocks([self.RED], [self.RED_TRAY, self.BLUE_TRAY]) is None
+        assert check_blocks([self.RED], [self.BLUE_TRAY]) is None
 
     def test_too_many_filaments(self):
         second = {**self.RED, "slot_id": 2, "color": "#0000FF"}
-        assert check_blocks([self.RED, second], [self.RED_TRAY], [0, -1]) == "too_many_filaments"
+        assert check_blocks([self.RED, second], [self.RED_TRAY]) == "too_many_filaments"
 
-    def test_unmatched(self):
-        assert check_blocks([self.RED], [self.BLUE_TRAY], [-1]) == "filament_unmatched"
-        assert check_blocks([self.RED], [self.BLUE_TRAY], None) == "filament_unmatched"
 
-    def test_material_only_match_is_ambiguous(self):
-        """Same PLA Basic (same filament id), different colour: the matcher
-        would print red parts in blue. Hand over instead of guessing."""
-        assert check_blocks([self.RED], [self.BLUE_TRAY], [1]) == "filament_ambiguous"
+class TestChosenTrays:
+    """A tray chosen in the preview decides the preset and the mapping."""
+
+    STATUS_TRAYS = [("PLA", "FF0000FF", "GFA01"), ("PETG", "000000FF", "GFG02"), ("PETG", "00FF00FF", "")]
+
+    def test_chosen_tray_overrides_the_match_and_picks_its_preset(self, tmp_path):
+        from backend.app.schemas.slicer_presets import UnifiedPreset
+        from backend.app.services.makerworld_print import ams_filament_names, pick_filament_presets
+
+        model = tmp_path / "seed.3mf"
+        model.write_bytes(_project_3mf())
+        status = _ams_status(self.STATUS_TRAYS)
+        assert ams_filament_names(model, status) == ["Bambu PLA Matte"]
+        names = ams_filament_names(model, status, [1])
+        assert names == ["Bambu PETG HF"]
+        petg = UnifiedPreset(
+            id="Bambu PETG HF @BBL X2D",
+            name="Bambu PETG HF @BBL X2D",
+            source="standard",
+            filament_type="PETG",
+            compatible_printers=["Bambu Lab X2D 0.4 nozzle"],
+        )
+        picked = pick_filament_presets(_project_3mf(), [*_bundled_filaments(), petg], "Bambu Lab X2D 0.4 nozzle", names)
+        assert [p.id for p in picked] == ["Bambu PETG HF @BBL X2D"]
+
+    def test_unknown_spool_gets_a_preset_of_its_material(self, tmp_path):
+        from backend.app.schemas.slicer_presets import UnifiedPreset
+        from backend.app.services.makerworld_print import (
+            ams_filament_names,
+            pick_filament_presets,
+            slot_tray_types,
+        )
+
+        model = tmp_path / "seed.3mf"
+        model.write_bytes(_project_3mf())
+        status = _ams_status(self.STATUS_TRAYS)
+        generic = UnifiedPreset(
+            id="Generic PETG @BBL X2D",
+            name="Generic PETG @BBL X2D",
+            source="standard",
+            filament_type="PETG",
+            compatible_printers=["Bambu Lab X2D 0.4 nozzle"],
+        )
+        picked = pick_filament_presets(
+            _project_3mf(),
+            [*_bundled_filaments(), generic],
+            "Bambu Lab X2D 0.4 nozzle",
+            ams_filament_names(model, status, [2]),
+            slot_tray_types(status, [2]),
+        )
+        assert [p.id for p in picked] == ["Generic PETG @BBL X2D"]
+
+    def test_mapping_keeps_the_chosen_tray_and_ignores_unloaded_ones(self):
+        from backend.app.services.makerworld_print import _apply_slot_trays
+
+        reqs = [{"slot_id": 1}, {"slot_id": 3}]
+        loaded = [{"global_tray_id": 0}, {"global_tray_id": 5}]
+        assert _apply_slot_trays([0, -1, 0], reqs, loaded, [None, None, 5]) == [0, -1, 5]
+        assert _apply_slot_trays(None, reqs, loaded, [5]) == [5]
+        assert _apply_slot_trays([0], reqs, loaded, [99]) == [0]  # not loaded
+        assert _apply_slot_trays([0], reqs, loaded, None) == [0]
 
 
 def test_bed_overflow_is_recognised_from_slicer_text():
@@ -401,7 +456,7 @@ class TestPrintRoute:
                 filament_used_mm=4000,
             )
 
-        async def fake_mappings(db, printer_id, library_file_id, path):
+        async def fake_mappings(db, printer_id, library_file_id, path, slot_trays=None):
             return state["plates"]
 
         health = AsyncMock(return_value={"status": "healthy"})
@@ -605,14 +660,14 @@ class TestPrintRoute:
         assert job["result"]["plates"][0]["block"] == "too_many_filaments"
 
     @pytest.mark.asyncio
-    async def test_ambiguous_filament_blocks_the_plate(self, async_client, printer, flow):
+    async def test_colour_mismatch_no_longer_blocks_the_plate(self, async_client, printer, flow):
         _, state = flow
         red = {"slot_id": 1, "type": "PLA", "color": "#FF0000"}
         blue_tray = {"global_tray_id": 0, "type": "PLA", "color": "0000FFFF"}
         state["plates"] = [{"plate": 1, "ams_mapping": [0], "requirements": [red], "loaded": [blue_tray]}]
         resp = await self._start(async_client)
         job = await self._finish(async_client, resp.json()["job_id"])
-        assert job["result"]["plates"][0]["block"] == "filament_ambiguous"
+        assert job["result"]["plates"][0]["block"] is None
 
     @pytest.mark.asyncio
     async def test_slicer_down_is_reported_before_anything_happens(self, async_client, printer, flow):

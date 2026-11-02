@@ -534,6 +534,7 @@ async def start_print_flow(
         pick_filament_presets,
         plate_mappings,
         select_profile,
+        slot_tray_types,
         system_printer_name,
     )
     from backend.app.services.printer_manager import printer_manager
@@ -639,12 +640,22 @@ async def start_print_flow(
                 "plates": [],
             }
             try:
-                filaments = body.filament_presets or pick_filament_presets(
-                    model_bytes,
-                    (await _fetch_bundled_presets(task_db))["filament"],
-                    system_printer_name(printer_ref, printer_model, printer_nozzle),
-                    ams_filament_names(model_path, printer_manager.get_status(printer_id)),
-                )
+                explicit = body.filament_presets or []
+                if explicit and all(explicit):
+                    filaments = explicit
+                else:
+                    status = printer_manager.get_status(printer_id)
+                    picked = pick_filament_presets(
+                        model_bytes,
+                        (await _fetch_bundled_presets(task_db))["filament"],
+                        system_printer_name(printer_ref, printer_model, printer_nozzle),
+                        ams_filament_names(model_path, status, body.slot_trays),
+                        slot_tray_types(status, body.slot_trays),
+                    )
+                    # A preset chosen in "Edit settings" wins over the pick.
+                    filaments = [
+                        (explicit[i] if i < len(explicit) else None) or preset for i, preset in enumerate(picked)
+                    ]
             except ValueError as exc:
                 return {**handover, "block": "no_filament_preset", "block_detail": str(exc)}
             request = goto_slice_request(
@@ -679,7 +690,7 @@ async def start_print_flow(
                 raise http_exception_to_job_error(exc) from exc
             out_file = await task_db.get(LibraryFile, sliced.library_file_id)
             plates = await plate_mappings(
-                task_db, printer_id, out_file.id, Path(app_settings.base_dir) / out_file.file_path
+                task_db, printer_id, out_file.id, Path(app_settings.base_dir) / out_file.file_path, body.slot_trays
             )
         return {
             **sliced.model_dump(),
@@ -698,7 +709,7 @@ async def start_print_flow(
                 {
                     "plate": p["plate"],
                     "ams_mapping": p["ams_mapping"],
-                    "block": check_blocks(p["requirements"], p["loaded"], p["ams_mapping"]),
+                    "block": check_blocks(p["requirements"], p["loaded"]),
                 }
                 for p in plates
             ],

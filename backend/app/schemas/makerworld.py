@@ -151,9 +151,13 @@ class MakerWorldPrintRequest(BaseModel):
         description="Creator's changed settings to carry, by key. Omitted: all of them when the profile was "
         "made for this printer, none otherwise.",
     )
-    filament_presets: list[PresetRef] | None = Field(
+    filament_presets: list[PresetRef | None] | None = Field(
         default=None,
-        description="Filament preset per project slot. Omitted: picked from the file's filaments for this printer.",
+        description="Filament preset per project slot. Omitted, or null for a slot: picked for this printer.",
+    )
+    slot_trays: list[int | None] | None = Field(
+        default=None,
+        description="Global AMS tray chosen per project slot. Null: matched automatically.",
     )
     bed_type: str | None = Field(
         default=None,

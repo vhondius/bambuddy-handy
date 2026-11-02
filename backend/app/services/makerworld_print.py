@@ -102,9 +102,16 @@ def select_profile(
     return (candidates[0]["id"], False) if candidates else (None, False)
 
 
-async def plate_mappings(db: AsyncSession, printer_id: int, library_file_id: int, file_path: Path) -> list[dict]:
-    """Per sliced plate: the AMS mapping the queue would compute, plus the
-    raw requirements and loaded trays (for the block checks)."""
+async def plate_mappings(
+    db: AsyncSession,
+    printer_id: int,
+    library_file_id: int,
+    file_path: Path,
+    slot_trays: list[int | None] | None = None,
+) -> list[dict]:
+    """Per sliced plate: the AMS mapping the queue would compute, with the
+    trays the user chose (``slot_trays``) on top, plus the raw requirements
+    and loaded trays (for the block checks)."""
     from backend.app.models.print_queue import PrintQueueItem
     from backend.app.services.archive import plate_indexes_in_3mf
     from backend.app.services.print_scheduler import scheduler
@@ -120,7 +127,29 @@ async def plate_mappings(db: AsyncSession, printer_id: int, library_file_id: int
         item = PrintQueueItem(library_file_id=library_file_id, plate_id=plate, filament_overrides=None)
         requirements = await scheduler._get_filament_requirements(db, item) or []
         mapping = await scheduler._compute_ams_mapping_for_printer(db, printer_id, item) if requirements else None
+        mapping = _apply_slot_trays(mapping, requirements, loaded, slot_trays)
         out.append({"plate": plate, "ams_mapping": mapping, "requirements": requirements, "loaded": loaded})
+    return out
+
+
+def _apply_slot_trays(
+    mapping: list[int] | None,
+    requirements: list[dict],
+    loaded: list[dict],
+    slot_trays: list[int | None] | None,
+) -> list[int] | None:
+    """Put the trays the user chose over the computed mapping. The list comes
+    from the client, so a tray that isn't loaded is ignored."""
+    known = {t.get("global_tray_id") for t in loaded}
+    out = list(mapping) if mapping else mapping
+    for req in requirements:
+        slot = req.get("slot_id") or 0
+        tray = slot_trays[slot - 1] if slot_trays and 0 < slot <= len(slot_trays) else None
+        if tray is None or tray not in known:
+            continue
+        out = out or []
+        out.extend([-1] * (slot - len(out)))
+        out[slot - 1] = tray
     return out
 
 
@@ -167,7 +196,7 @@ def _as_list(value: Any) -> list:
     return value if isinstance(value, list) else [value] if value else []
 
 
-def ams_filament_names(model_path: Path, status) -> list[str | None]:
+def ams_filament_names(model_path: Path, status, slot_trays: list[int | None] | None = None) -> list[str | None]:
     """Per project filament slot, the name of the spool the AMS would feed it
     ("Bambu PLA Matte"), or None. Matched with the print scheduler's own
     matcher — the one the queue maps slots with at print time, so it never
@@ -178,7 +207,10 @@ def ams_filament_names(model_path: Path, status) -> list[str | None]:
     spool to one slot, so an unused slot must not claim the spool a used one
     needs. The file's slicing record says which are used (and, on dual-nozzle
     printers, which nozzle each feeds); a file without one falls back to every
-    project slot."""
+    project slot.
+
+    A tray the user chose (``slot_trays``) replaces the matcher's for that
+    slot, so the preset follows the spool that will actually print."""
     from backend.app.api.routes.cloud import _BUILTIN_FILAMENT_NAMES
     from backend.app.services.filament_requirements import extract_filament_requirements
     from backend.app.services.print_scheduler import scheduler
@@ -209,7 +241,21 @@ def ams_filament_names(model_path: Path, status) -> list[str | None]:
         tray = trays.get(tray_id)
         if tray:
             names[i] = _BUILTIN_FILAMENT_NAMES.get(tray.get("tray_info_idx") or "")
+    for i, tray_id in enumerate((slot_trays or [])[: len(names)]):
+        if tray_id in trays:
+            names[i] = _BUILTIN_FILAMENT_NAMES.get(trays[tray_id].get("tray_info_idx") or "")
     return names
+
+
+def slot_tray_types(status, slot_trays: list[int | None] | None) -> list[str | None]:
+    """The material of each tray the user chose, per project slot. Picks a
+    preset for a spool whose id isn't known, such as a third-party one."""
+    from backend.app.services.print_scheduler import scheduler
+
+    if not status or not slot_trays:
+        return []
+    trays = {f["global_tray_id"]: f for f in scheduler._build_loaded_filaments(status)}
+    return [(trays.get(tray_id) or {}).get("type") or None for tray_id in slot_trays]
 
 
 def pick_filament_presets(
@@ -217,12 +263,14 @@ def pick_filament_presets(
     standard_filaments: list,
     printer_name: str | None,
     ams_names: list[str | None] | None = None,
+    tray_types: list[str | None] | None = None,
 ) -> list[PresetRef]:
     """One standard filament preset per project filament slot, for the
     target printer: the filament loaded in the AMS slot it will print from
     (``ams_names``), else the creator's own preset re-targeted ("Bambu PLA
     Basic @BBL A1" → "Bambu PLA Basic @BBL X2D"), else a preset of the slot's
-    material, Bambu before Generic.
+    material, Bambu before Generic. A tray the user chose (``tray_types``)
+    sets the material, and rules out the creator's preset if that differs.
 
     # ponytail: standard tier only and a name/material heuristic; port the
     # SliceModal's scored picker (utils/slicePresetPicker.ts) if users need
@@ -240,7 +288,10 @@ def pick_filament_presets(
     for i in range(max(len(names), len(types), 1)):
         base = names[i].split(" @")[0] if i < len(names) else ""
         loaded = ams_names[i] if ams_names and i < len(ams_names) else None
-        ftype = (types[i] if i < len(types) else "PLA").upper()
+        project_type = (types[i] if i < len(types) else "PLA").upper()
+        ftype = ((tray_types[i] if tray_types and i < len(tray_types) else None) or project_type).upper()
+        if ftype != project_type:
+            base = ""
         same_name = [p for p in compatible if loaded and p.name.split(" @")[0] == loaded] or [
             p for p in compatible if base and p.name.split(" @")[0] == base
         ]
@@ -308,34 +359,14 @@ def is_bed_overflow(detail: str) -> bool:
     return bool(_BED_OVERFLOW.search(detail or ""))
 
 
-def check_blocks(requirements: list[dict], loaded: list[dict], mapping: list[int] | None) -> str | None:
+def check_blocks(requirements: list[dict], loaded: list[dict]) -> str | None:
     """Why this plate must go to the Print dialog instead, or None.
 
     ``too_many_filaments``: the plate needs more filaments than are loaded.
-    ``filament_unmatched``: a filament has no AMS slot.
-    ``filament_ambiguous``: a slot only matches on material — the colour
-    differs, so the matcher would be guessing.
+    Everything else about the trays is settled in the preview.
     """
-    from backend.app.services.print_scheduler import scheduler
-
-    if not requirements:
-        return None
-    if len(requirements) > len(loaded):
+    if requirements and len(requirements) > len(loaded):
         return "too_many_filaments"
-    trays = {t.get("global_tray_id"): t for t in loaded}
-    for req in requirements:
-        slot = req.get("slot_id") or 0
-        tray_id = mapping[slot - 1] if mapping and 0 < slot <= len(mapping) else -1
-        tray = trays.get(tray_id)
-        if tray is None:
-            return "filament_unmatched"
-        # Colour, not the filament id: tray_info_idx names a product line
-        # (GFA00 is every Bambu PLA Basic), so black and white share one.
-        same_colour = scheduler._normalize_color_for_compare(req.get("color")) == (
-            scheduler._normalize_color_for_compare(tray.get("color"))
-        ) or scheduler._colors_are_similar(req.get("color"), tray.get("color"))
-        if not same_colour:
-            return "filament_ambiguous"
     return None
 
 

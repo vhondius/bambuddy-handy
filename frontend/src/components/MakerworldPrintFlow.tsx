@@ -10,7 +10,8 @@ import {
   type PresetRef,
   type SliceJobState,
 } from '../api/client';
-import { buildLoadedFilaments } from '../hooks/useFilamentMapping';
+import { buildAmsMapping, buildFilamentComparison, buildLoadedFilaments } from '../hooks/useFilamentMapping';
+import { getCurrencySymbol } from '../utils/currency';
 import type { SettingValue } from '../types/slicerSettings';
 import SlicerSettingsPanel from './SlicerSettingsPanel';
 import { findPreset } from '../utils/slicePresetPicker';
@@ -20,6 +21,7 @@ import { formatDuration } from '../utils/date';
 import { Button } from './Button';
 import { GcodeToolpathViewer } from './GcodeToolpathViewer';
 import { PrintModal } from './PrintModal';
+import { FilamentMapping } from './PrintModal/FilamentMapping';
 import { BedTypeDropdown, PresetDropdown, SliceModal, type SliceSource } from './SliceModal';
 
 declare global {
@@ -70,8 +72,21 @@ interface Edits {
   values: Record<string, SettingValue>;
   serialized: Record<string, string | string[]>;
   designKeys: string[];
-  filaments: PresetRef[];
+  /** Null for a slot: picked to suit the chosen tray. */
+  filaments: (PresetRef | null)[];
   bedType: string | null;
+  slotTrays?: (number | null)[];
+}
+
+/** Tray per project slot from the preview's picks, per plate. The plate on
+ *  screen wins when two plates chose differently for one slot. */
+function slotTraysFromPicks(picks: Record<number, Record<number, number>>, plate: number): (number | null)[] {
+  const merged: Record<number, number> = {};
+  for (const plateNum of Object.keys(picks)) Object.assign(merged, picks[Number(plateNum)]);
+  Object.assign(merged, picks[plate]);
+  const slots = Object.keys(merged).map(Number);
+  if (slots.length === 0) return [];
+  return Array.from({ length: Math.max(...slots) }, (_, i) => merged[i + 1] ?? null);
 }
 
 /**
@@ -119,6 +134,10 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
   }, []);
   // Kept across re-slices so a second edit starts from the first one.
   const [edits, setEdits] = useState<Edits | null>(null);
+  // Also kept across re-slices: the plate on screen and the trays picked per plate.
+  const [plateIdx, setPlateIdx] = useState(0);
+  const [trayPicks, setTrayPicks] = useState<Record<number, Record<number, number>>>({});
+  const [resliceNote, setResliceNote] = useState<string | null>(null);
   const handOver = (h: Handover) => {
     if (h.to === 'printerSettings') {
       onClose();
@@ -140,6 +159,7 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
             design_overrides: withEdits.designKeys,
             filament_presets: withEdits.filaments,
             bed_type: withEdits.bedType,
+            ...(withEdits.slotTrays?.length ? { slot_trays: withEdits.slotTrays } : {}),
           },
         );
         setStep({ kind: 'slicing', jobId: started.job_id, job: null });
@@ -242,6 +262,9 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
           </button>
         </div>
         <div className="p-4 flex-1">
+          {(step.kind === 'starting' || step.kind === 'slicing') && resliceNote && (
+            <p className="text-sm text-center text-bambu-gray">{resliceNote}</p>
+          )}
           {step.kind === 'starting' && <Busy label={t('makerworld.printFlow.preparing')} />}
           {step.kind === 'slicing' && (
             <Busy
@@ -285,14 +308,40 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
               edits={edits}
               onCancel={() => setStep({ kind: 'preview', result: step.result })}
               onSave={(next) => {
-                setEdits(next);
-                start(step.result.printer_id, next);
+                const withTrays = {
+                  ...next,
+                  slotTrays: slotTraysFromPicks(trayPicks, step.result.plates[plateIdx]?.plate ?? 1),
+                };
+                setEdits(withTrays);
+                setResliceNote(null);
+                start(step.result.printer_id, withTrays);
               }}
             />
           )}
           {step.kind === 'preview' && (
             <Preview
               result={step.result}
+              plateIdx={plateIdx}
+              setPlateIdx={setPlateIdx}
+              trayPicks={trayPicks}
+              onPick={(plate, picks) => setTrayPicks((prev) => ({ ...prev, [plate]: picks }))}
+              onResliceForSpool={(plate, picks, slotId, material) => {
+                const allPicks = { ...trayPicks, [plate]: picks };
+                const filaments = [...(edits?.filaments ?? step.result.filament_presets ?? [])];
+                filaments[slotId - 1] = null;
+                const next: Edits = {
+                  values: edits?.values ?? {},
+                  serialized: edits?.serialized ?? {},
+                  designKeys: edits?.designKeys ?? step.result.design_overrides ?? [],
+                  bedType: edits ? edits.bedType : (step.result.bed_type ?? null),
+                  filaments,
+                  slotTrays: slotTraysFromPicks(allPicks, plate),
+                };
+                setTrayPicks(allPicks);
+                setEdits(next);
+                setResliceNote(t('makerworld.printFlow.reslicingFor', { material }));
+                start(step.result.printer_id, next);
+              }}
               onHandOver={handOver}
               onEditSettings={() => setStep({ kind: 'editSettings', result: step.result })}
               showGcode={showGcode}
@@ -340,6 +389,11 @@ function Busy({ label, percent }: { label: string; percent?: number }) {
 
 function Preview({
   result,
+  plateIdx,
+  setPlateIdx,
+  trayPicks,
+  onPick,
+  onResliceForSpool,
   onDone,
   onHandOver,
   onEditSettings,
@@ -347,6 +401,11 @@ function Preview({
   setShowGcode,
 }: {
   result: MakerworldPrintResult;
+  plateIdx: number;
+  setPlateIdx: (idx: number) => void;
+  trayPicks: Record<number, Record<number, number>>;
+  onPick: (plate: number, picks: Record<number, number>) => void;
+  onResliceForSpool: (plate: number, picks: Record<number, number>, slotId: number, material: string) => void;
   onDone: () => void;
   onHandOver: (h: Handover) => void;
   onEditSettings: () => void;
@@ -354,7 +413,6 @@ function Preview({
   setShowGcode: (open: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [plateIdx, setPlateIdx] = useState(0);
   const [queueing, setQueueing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -370,7 +428,44 @@ function Preview({
   const flowPlate = result.plates[plateIdx] ?? result.plates[0];
   const plateNum = flowPlate?.plate ?? 1;
   const meta = platesData?.plates.find((p) => p.index === plateNum);
-  const loaded = buildLoadedFilaments(status);
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const { data: filamentReqs, isLoading: reqsLoading } = useQuery({
+    queryKey: ['library-file-filament-reqs', result.library_file_id, plateNum],
+    queryFn: () => api.getLibraryFileFilamentRequirements(result.library_file_id, plateNum),
+  });
+  const loaded = useMemo(() => buildLoadedFilaments(status), [status]);
+  // The trays on screen: what the user picked, else what the slice mapped.
+  const picks = useMemo(() => {
+    const chosen = trayPicks[plateNum];
+    if (chosen) return chosen;
+    const seeded: Record<number, number> = {};
+    for (const f of filamentReqs?.filaments ?? []) {
+      const tray = flowPlate?.ams_mapping?.[f.slot_id - 1];
+      if (tray != null && tray >= 0) seeded[f.slot_id] = tray;
+    }
+    return seeded;
+  }, [trayPicks, plateNum, filamentReqs, flowPlate]);
+  const comparison = useMemo(
+    () =>
+      buildFilamentComparison(filamentReqs, loaded, picks, false, undefined, status?.fila_switch?.installed === true),
+    [filamentReqs, loaded, picks, status],
+  );
+  const mapping = filamentReqs ? buildAmsMapping(comparison) : flowPlate?.ams_mapping;
+  const trayMissing = comparison.some((f) => !f.loaded);
+
+  const changePicks = (next: Record<number, number>) => {
+    const changed = filamentReqs?.filaments.find((f) => next[f.slot_id] !== picks[f.slot_id]);
+    const tray = changed && loaded.find((l) => l.globalTrayId === next[changed.slot_id]);
+    // Another tray of the same filament prints the same; another material or
+    // product needs its own preset and temperatures.
+    const needsReslice =
+      changed &&
+      tray &&
+      (tray.type.toUpperCase() !== changed.type.toUpperCase() ||
+        (!!tray.trayInfoIdx && !!changed.tray_info_idx && tray.trayInfoIdx !== changed.tray_info_idx));
+    if (needsReslice) onResliceForSpool(plateNum, next, changed.slot_id, tray.type);
+    else onPick(plateNum, next);
+  };
 
   const queue = async () => {
     setQueueing(true);
@@ -380,7 +475,7 @@ function Preview({
         printer_id: result.printer_id,
         library_file_id: result.library_file_id,
         plate_id: plateNum,
-        ams_mapping: flowPlate?.ams_mapping ?? null,
+        ams_mapping: mapping ?? null,
       });
       onDone();
     } catch (err) {
@@ -445,24 +540,15 @@ function Preview({
         <dt className="text-bambu-gray">{t('makerworld.printFlow.plateType')}</dt>
         <dd className="text-white text-right break-words">{meta?.bed_type ?? '—'}</dd>
       </dl>
-      <div>
-        <h3 className="text-sm font-medium text-white mb-2">{t('makerworld.printFlow.filaments')}</h3>
-        <ul className="space-y-1">
-          {(meta?.filaments ?? []).map((f) => {
-            const tray = flowPlate?.ams_mapping?.[f.slot_id - 1];
-            const slot = loaded.find((l) => l.globalTrayId === tray);
-            return (
-              <li key={f.slot_id} className="flex items-center gap-2 text-sm">
-                <span className="w-4 h-4 rounded-full border border-white/20 shrink-0" style={{ backgroundColor: f.color }} />
-                <span className="text-white flex-1 min-w-0 truncate">
-                  {f.type} → {slot ? slot.label : t('makerworld.printFlow.unmapped')}
-                </span>
-                <span className="text-bambu-gray shrink-0">{f.used_grams.toFixed(1)} g</span>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
+      <FilamentMapping
+        printerId={result.printer_id}
+        filamentReqs={filamentReqs}
+        manualMappings={picks}
+        onManualMappingChange={changePicks}
+        defaultExpanded
+        currencySymbol={getCurrencySymbol(settings?.currency || 'USD')}
+        defaultCostPerKg={settings?.default_filament_cost ?? 0}
+      />
       {error && <p className="text-red-400 text-sm break-words">{error}</p>}
       {block && <p className="text-sm rounded-lg p-3 bg-red-500/10 text-red-300">{t(`makerworld.printFlow.blocks.${block}`)}</p>}
       <div className="flex flex-wrap gap-2 pt-2">
@@ -493,7 +579,7 @@ function Preview({
             {t('makerworld.printFlow.openPrintDialog')}
           </Button>
         ) : (
-          <Button className="flex-1 min-w-[8rem]" onClick={queue} disabled={queueing}>
+          <Button className="flex-1 min-w-[8rem]" onClick={queue} disabled={queueing || reqsLoading || trayMissing}>
             {queueing ? <Loader2 className="w-4 h-4 animate-spin" /> : t('makerworld.printFlow.print')}
           </Button>
         )}
@@ -524,8 +610,9 @@ function EditSettings({
   const [designKeys, setDesignKeys] = useState<Set<string>>(
     () => new Set(edits?.designKeys ?? result.design_overrides ?? []),
   );
-  const [filaments, setFilaments] = useState<(PresetRef | null)[]>(
-    edits?.filaments ?? result.filament_presets ?? [],
+  // A slot left for the backend to pick shows what it picked.
+  const [filaments, setFilaments] = useState<(PresetRef | null)[]>(() =>
+    (edits?.filaments ?? result.filament_presets ?? []).map((f, i) => f ?? result.filament_presets?.[i] ?? null),
   );
   const [bedType, setBedType] = useState<string | null>(edits?.bedType ?? result.bed_type ?? null);
   const process = result.process_preset!;
@@ -598,7 +685,7 @@ function EditSettings({
           className="flex-1 min-w-[8rem]"
           disabled={filaments.some((f) => f == null)}
           onClick={() =>
-            onSave({ values, serialized, designKeys: [...designKeys], filaments: filaments as PresetRef[], bedType })
+            onSave({ values, serialized, designKeys: [...designKeys], filaments, bedType })
           }
         >
           {t('makerworld.printFlow.saveAndReslice')}

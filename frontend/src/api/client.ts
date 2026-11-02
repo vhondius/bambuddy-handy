@@ -2118,8 +2118,6 @@ export interface MakerworldPrintStart {
 /** Why a plate (or the whole flow) hands over to an existing dialog. */
 export type MakerworldPrintBlock =
   | 'too_many_filaments'
-  | 'filament_unmatched'
-  | 'filament_ambiguous'
   | 'bed_overflow'
   | 'no_filament_preset';
 
@@ -6159,8 +6157,11 @@ export const api = {
     edits?: {
       process_overrides: Record<string, string | string[]>;
       design_overrides: string[];
-      filament_presets?: PresetRef[];
+      /** Null for a slot: picked for this printer. */
+      filament_presets?: (PresetRef | null)[];
       bed_type?: string | null;
+      /** Global AMS tray chosen per project slot. */
+      slot_trays?: (number | null)[];
     } | null,
   ) =>
     request<MakerworldPrintStart>('/makerworld/print', {
