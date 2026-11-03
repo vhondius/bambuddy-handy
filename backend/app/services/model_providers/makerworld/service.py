@@ -283,7 +283,14 @@ class MakerWorldService(ProviderService):
 
         signed_url = manifest.get("url")
         if not signed_url or not isinstance(signed_url, str):
-            raise MakerWorldUnavailableError("MakerWorld did not return a download URL")
+            # A 200 without a URL. Seen on model 873006, whose public metadata has no
+            # restriction flag, so the cause is unknown: log the body to find it.
+            logger.warning("Bambu Lab API gave no URL for profile %s: %s", profile_id, str(manifest)[:500])
+            upstream = next((manifest[k] for k in ("error", "message", "detail") if manifest.get(k)), None)
+            raise MakerWorldForbiddenError(
+                f"MakerWorld refused to download this plate{f' ({upstream})' if upstream else ''}. "
+                "Check whether the model page on makerworld.com offers a download."
+            )
 
         # Raw upstream name — the route layer basenames / percent-decodes it
         # as defence-in-depth before persisting.

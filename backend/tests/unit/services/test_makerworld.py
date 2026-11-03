@@ -450,11 +450,19 @@ class TestGetDownload:
             await self._run(service, ProviderResourceRef(source_type="makerworld", external_id="1400373"))
 
     @pytest.mark.asyncio
-    async def test_manifest_without_url_is_unavailable(self, service):
+    async def test_manifest_without_url_is_refused_with_reason(self, service):
+        service.get_design = AsyncMock(return_value=self._design())
+        service.get_profile_download = AsyncMock(return_value={"name": "benchy.3mf", "message": "Not allowed"})
+
+        with pytest.raises(MakerWorldForbiddenError, match=r"\(Not allowed\).*model page"):
+            await self._run(service, ProviderResourceRef(source_type="makerworld", external_id="1400373"))
+
+    @pytest.mark.asyncio
+    async def test_manifest_without_url_or_reason_is_refused(self, service):
         service.get_design = AsyncMock(return_value=self._design())
         service.get_profile_download = AsyncMock(return_value={"name": "benchy.3mf"})
 
-        with pytest.raises(MakerWorldUnavailableError, match="download URL"):
+        with pytest.raises(MakerWorldForbiddenError, match="this plate. Check whether"):
             await self._run(service, ProviderResourceRef(source_type="makerworld", external_id="1400373"))
 
 
