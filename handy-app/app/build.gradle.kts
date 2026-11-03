@@ -11,8 +11,8 @@ android {
         applicationId = "com.vhondius.bambuddyhandy"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     // A fixed local key (app/handy.keystore, kept out of git): every build is
