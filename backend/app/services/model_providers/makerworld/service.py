@@ -285,8 +285,17 @@ class MakerWorldService(ProviderService):
         if not signed_url or not isinstance(signed_url, str):
             # A 200 without a URL. Seen on model 873006, whose public metadata has no
             # restriction flag, so the cause is unknown: log the body to find it.
-            logger.warning("Bambu Lab API gave no URL for profile %s: %s", profile_id, str(manifest)[:500])
-            upstream = next((manifest[k] for k in ("error", "message", "detail") if manifest.get(k)), None)
+            # ``context`` (printer compatibility) is long enough to push the rest out of a log line.
+            logger.warning(
+                "Bambu Lab API gave no URL for profile %s: %s",
+                profile_id,
+                str({k: v for k, v in manifest.items() if k != "context"})[:2000],
+            )
+            # A 200's ``message`` is normally just "success", which is no reason.
+            upstream = next(
+                (manifest[k] for k in ("error", "message", "detail") if manifest.get(k) not in (None, "", "success")),
+                None,
+            )
             raise MakerWorldForbiddenError(
                 f"MakerWorld refused to download this plate{f' ({upstream})' if upstream else ''}. "
                 "Check whether the model page on makerworld.com offers a download."
