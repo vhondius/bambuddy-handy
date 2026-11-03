@@ -163,6 +163,18 @@ class ProviderForbiddenError(ProviderError):
     content-gated (purchase/points required, region restricted, ...)."""
 
 
+class ProviderNoDownloadError(ProviderForbiddenError):
+    """Raised when the provider describes a file but gives no link to it.
+
+    ``ref`` names the resolved plate, so a copy obtained another way (the
+    phone app's own MakerWorld session) can still be found by its source URL.
+    """
+
+    def __init__(self, message: str, ref: ProviderResourceRef):
+        super().__init__(message)
+        self.ref = ref
+
+
 class ProviderNotFoundError(ProviderError):
     """Raised when a model / file / profile doesn't exist."""
 

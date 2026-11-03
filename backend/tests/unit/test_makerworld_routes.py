@@ -9,6 +9,8 @@ listing endpoint.
 
 from __future__ import annotations
 
+import io
+import zipfile
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +19,7 @@ import pytest
 from backend.app.api.routes import makerworld as makerworld_routes
 from backend.app.core.permissions import Permission
 from backend.app.models.library import LibraryFile, LibraryFolder
+from backend.app.services.makerworld_print import PRINT_FLOW_MARK
 from backend.app.services.model_providers.base import (
     ModelProvider,
     ProviderDownload,
@@ -26,6 +29,7 @@ from backend.app.services.model_providers.base import (
     ProviderStatus,
 )
 from backend.app.services.model_providers.makerworld import makerworld_provider
+from backend.app.services.model_providers.makerworld.errors import MakerWorldNoDownloadError
 
 
 def _download_info(
@@ -815,6 +819,67 @@ class TestImport:
         assert resp.status_code == 409, resp.text
         # Pre-existing file's contents must not be clobbered by the failed write.
         assert (ext_dir / "benchy.3mf").read_bytes() == b"pre-existing"
+
+
+class TestDevicePlate:
+    """Bambu's API gives no link: the phone app uploads the plate, and the
+    print flow's next /import finds it."""
+
+    MODEL = 1400373
+    INSTANCE = 109644
+    PROFILE = 35438952
+
+    @staticmethod
+    def _zip() -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr("3D/3dmodel.model", "<model/>")
+        return buf.getvalue()
+
+    def _service(self):
+        ref = ProviderResourceRef(source_type="makerworld", external_id=str(self.MODEL), sub_id=str(self.PROFILE))
+        svc = _fake_service(get_design={"instances": [{"id": self.INSTANCE, "profileId": self.PROFILE}]})
+        svc.get_download = AsyncMock(side_effect=MakerWorldNoDownloadError("no link", ref=ref))
+        return svc
+
+    async def _upload(self, client, content, name="my%20plate.3mf", instance=None):
+        return await client.post(
+            f"/api/v1/makerworld/print/device-plate?model_id={self.MODEL}&instance_id={instance or self.INSTANCE}",
+            files={"file": (name, content, "application/octet-stream")},
+        )
+
+    @pytest.mark.asyncio
+    async def test_import_answers_424_until_the_plate_is_uploaded(self, async_client, db_session):
+        svc = self._service()
+        body = {"model_id": self.MODEL, "instance_id": self.INSTANCE}
+        with patch("backend.app.api.routes.makerworld._build_service", AsyncMock(return_value=svc)):
+            first = await async_client.post("/api/v1/makerworld/import", json=body)
+            assert first.status_code == 424, first.text
+
+            uploaded = await self._upload(async_client, self._zip())
+            assert uploaded.status_code == 200, uploaded.text
+            assert uploaded.json()["filename"] == "my plate.3mf"
+
+            again = await async_client.post("/api/v1/makerworld/import", json=body)
+        assert again.status_code == 200, again.text
+        assert again.json()["library_file_id"] == uploaded.json()["library_file_id"]
+        # /import is not the print flow, so it keeps what it was asked to import.
+        row = await db_session.get(LibraryFile, uploaded.json()["library_file_id"])
+        await db_session.refresh(row)
+        assert PRINT_FLOW_MARK not in (row.file_metadata or {})
+
+    @pytest.mark.asyncio
+    async def test_upload_is_swept_like_a_print_flow_download(self, async_client, db_session):
+        with patch("backend.app.api.routes.makerworld._build_service", AsyncMock(return_value=self._service())):
+            uploaded = await self._upload(async_client, self._zip())
+        row = await db_session.get(LibraryFile, uploaded.json()["library_file_id"])
+        assert row.file_metadata[PRINT_FLOW_MARK] is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_what_is_not_a_3mf_or_not_this_model(self, async_client):
+        with patch("backend.app.api.routes.makerworld._build_service", AsyncMock(return_value=self._service())):
+            assert (await self._upload(async_client, b"<html>nope</html>")).status_code == 400
+            assert (await self._upload(async_client, self._zip(), instance=1)).status_code == 404
 
 
 class TestRecentImports:

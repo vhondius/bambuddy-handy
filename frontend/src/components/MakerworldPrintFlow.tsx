@@ -6,6 +6,7 @@ import { ArrowLeft, Loader2, Printer as PrinterIcon, X } from 'lucide-react';
 import {
   api,
   ApiError,
+  getAuthToken,
   type MakerworldPlateObject,
   type MakerworldPrintResult,
   type PresetRef,
@@ -28,7 +29,13 @@ import { BedTypeDropdown, PresetDropdown, SliceModal, type SliceSource } from '.
 declare global {
   interface Window {
     /** Set by the Bambuddy Handy Android app. */
-    BambuddyHandyApp?: { closeFlow: () => void };
+    BambuddyHandyApp?: {
+      closeFlow: () => void;
+      /** Fetches a plate with the app's MakerWorld session and uploads it to Bambuddy. */
+      fetchPlate?: (modelId: string, instanceId: string, token: string) => void;
+    };
+    /** Called by the app when fetchPlate ends: an error message, or null. */
+    BambuddyHandyPlateResult?: (error: string | null) => void;
     /** Called by the app's Back button; true when the flow handled it. */
     BambuddyHandyBack?: () => boolean;
   }
@@ -150,8 +157,10 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
     }
   };
 
+  const retryRef = useRef<(() => void) | null>(null);
   const start = useCallback(
     async (chosenPrinterId?: number | null, withEdits: Edits | null = null) => {
+      retryRef.current = () => start(chosenPrinterId, withEdits);
       setStep({ kind: 'starting' });
       try {
         const started = await api.startMakerworldPrint(
@@ -189,11 +198,45 @@ export function MakerworldPrintFlow({ url, printerId, jobId: resumeJobId, onJobS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Bambu's API gave no link: the app fetches the plate, then the flow runs
+  // again and finds it in the library. Each plate is tried once.
+  const triedPlates = useRef(new Set<number>());
+  const fetchPlateRef = useRef<(result: MakerworldPrintResult) => void>(() => {});
+  fetchPlateRef.current = (result) => {
+    const fetchPlate = window.BambuddyHandyApp?.fetchPlate;
+    const instanceId = result.instance_id;
+    if (!fetchPlate || instanceId == null || triedPlates.current.has(instanceId)) {
+      setStep({ kind: 'error', message: result.block_detail ?? t('makerworld.printFlow.sliceFailed') });
+      return;
+    }
+    triedPlates.current.add(instanceId);
+    setStep({ kind: 'starting' });
+    window.BambuddyHandyPlateResult = (error) => {
+      delete window.BambuddyHandyPlateResult;
+      if (error) setStep({ kind: 'error', message: error });
+      else (retryRef.current ?? (() => start(printerId)))();
+    };
+    window.BambuddyHandyApp?.fetchPlate?.(String(result.model_id), String(instanceId), getAuthToken() ?? '');
+  };
+  useEffect(
+    () => () => {
+      delete window.BambuddyHandyPlateResult;
+    },
+    [],
+  );
+
   const jobId = step.kind === 'slicing' ? step.jobId : null;
   useEffect(() => {
     if (jobId === null) return;
+    let handledPlateJob = false;
     const apply = (job: SliceJobState) => {
       if (job.job_id !== jobId) return;
+      if (job.status === 'completed' && (job.result as MakerworldPrintResult).block === 'needs_device_download') {
+        // The WebSocket and the poll can both report this; only act once.
+        if (!handledPlateJob) fetchPlateRef.current(job.result as MakerworldPrintResult);
+        handledPlateJob = true;
+        return;
+      }
       setStep((prev) => {
         if (prev.kind !== 'slicing') return prev;
         if (job.status === 'completed') {

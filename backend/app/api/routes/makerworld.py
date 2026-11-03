@@ -19,11 +19,13 @@ with zero route changes arrives with #2793.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
+import zipfile
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
@@ -57,12 +59,14 @@ from backend.app.services.model_providers.base import (
     ProviderAuthError,
     ProviderError,
     ProviderForbiddenError,
+    ProviderNoDownloadError,
     ProviderNotFoundError,
     ProviderResourceRef,
     ProviderService,
     ProviderUnavailableError,
     ProviderUrlError,
 )
+from backend.app.services.model_providers.makerworld.http import _MAX_3MF_BYTES
 from backend.app.services.model_providers.makerworld.service import MakerWorldService
 
 logger = logging.getLogger(__name__)
@@ -155,6 +159,9 @@ def _map_service_error(exc: ProviderError) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, ProviderAuthError):
         return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ProviderNoDownloadError):
+        # Its own status: the print flow answers it by asking the phone app.
+        return HTTPException(status_code=424, detail=str(exc))
     if isinstance(exc, ProviderForbiddenError):
         # 403 forwards the provider's own refusal message (content-gated,
         # region-locked, requires points, etc.) — UI surfaces it verbatim.
@@ -300,6 +307,33 @@ async def resolve_url(
     )
 
 
+async def _default_folder_id(db: AsyncSession, provider: ModelProvider) -> int | None:
+    """Default destination: the resolved provider's dedicated top-level
+    folder (``default_folder_name`` — read off *provider*, not the MakerWorld
+    singleton, so the second provider lands in its own folder). Keeps imports
+    out of the library root so power users can still organise manually in
+    subfolders, and auto-creates the folder on the first import so users don't
+    have to set it up themselves. A provider that leaves it unset imports into
+    the library root rather than minting a NULL-named folder.
+    """
+    default_folder_name = provider.default_folder_name
+    if default_folder_name is None:
+        return None
+    default_folder_q = await db.execute(
+        select(LibraryFolder).where(
+            LibraryFolder.name == default_folder_name,
+            LibraryFolder.parent_id.is_(None),
+            LibraryFolder.is_external.is_(False),
+        )
+    )
+    default_folder = default_folder_q.scalar_one_or_none()
+    if default_folder is None:
+        default_folder = LibraryFolder(name=default_folder_name, parent_id=None)
+        db.add(default_folder)
+        await db.flush()
+    return default_folder.id
+
+
 @router.post(
     "/import",
     response_model=MakerWorldImportResponse,
@@ -342,31 +376,7 @@ async def import_instance(
             )
         effective_folder_id: int | None = body.folder_id
     else:
-        # Default destination: the resolved provider's dedicated top-level
-        # folder (``default_folder_name`` — read off *provider*, not the
-        # MakerWorld singleton, so the second provider lands in its own
-        # folder). Keeps imports out of the library root so power users can
-        # still organise manually in subfolders, and auto-creates the folder
-        # on the first import so users don't have to set it up themselves. A
-        # provider that leaves it unset imports into the library root rather
-        # than minting a NULL-named folder.
-        default_folder_name = provider.default_folder_name
-        if default_folder_name is None:
-            effective_folder_id = None
-        else:
-            default_folder_q = await db.execute(
-                select(LibraryFolder).where(
-                    LibraryFolder.name == default_folder_name,
-                    LibraryFolder.parent_id.is_(None),
-                    LibraryFolder.is_external.is_(False),
-                )
-            )
-            default_folder = default_folder_q.scalar_one_or_none()
-            if default_folder is None:
-                default_folder = LibraryFolder(name=default_folder_name, parent_id=None)
-                db.add(default_folder)
-                await db.flush()
-            effective_folder_id = default_folder.id
+        effective_folder_id = await _default_folder_id(db, provider)
 
     service = await _build_service(db, provider, current_user, api_key_cloud_owner)
 
@@ -385,16 +395,25 @@ async def import_instance(
     )
 
     try:
-        info = await service.get_download(ref)
+        info = None
+        no_download: ProviderNoDownloadError | None = None
+        try:
+            info = await service.get_download(ref)
+            resolved_ref = info.ref
+        except ProviderNoDownloadError as exc:
+            # No link, but the phone app may have uploaded this plate already.
+            no_download = exc
+            resolved_ref = exc.ref
+
         # The provider enriches ``sub_id`` with the actually-resolved profile
         # when the caller omitted one. A caller that named a profile gets its
         # own id back — the page keys its imported-plate cards by it — even
         # when the download had to map it to a different one.
-        resolved_profile_id = body.profile_id or (int(info.ref.sub_id) if info.ref.sub_id else None)
+        resolved_profile_id = body.profile_id or (int(resolved_ref.sub_id) if resolved_ref.sub_id else None)
 
         # Canonical URL includes profile_id so each plate gets its own library
         # entry (see ``ModelProvider.canonical_url``).
-        source_url = provider.canonical_url(info.ref)
+        source_url = provider.canonical_url(resolved_ref)
 
         # Dedupe check upfront so we don't burn bandwidth re-downloading.
         existing_q = await db.execute(LibraryFile.active().where(LibraryFile.source_url == source_url).limit(1))
@@ -414,6 +433,8 @@ async def import_instance(
                 was_existing=True,
             )
 
+        if no_download is not None:
+            raise no_download
         download = await service.download(info)
     except ProviderError as exc:
         raise _map_service_error(exc) from exc
@@ -461,6 +482,81 @@ async def import_instance(
         filename=library_file.filename,
         folder_id=library_file.folder_id,
         profile_id=resolved_profile_id,
+        was_existing=was_existing,
+    )
+
+
+@router.post(
+    "/print/device-plate",
+    response_model=MakerWorldImportResponse,
+    dependencies=[Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD))],
+)
+async def upload_device_plate(
+    model_id: int = Query(...),
+    instance_id: int = Query(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    api_key_cloud_owner: User | None = Depends(resolve_api_key_cloud_owner),
+):
+    """A plate the phone app fetched with its own MakerWorld session, for when
+    Bambu's API gives no link. Stored where ``/import`` looks for it, and swept
+    after an hour like any other print-flow download.
+    """
+    provider = makerworld_provider
+    current_user = await _authorize_for_provider(provider, provider.import_permission, credentials, x_api_key)
+    file_bytes = await file.read(_MAX_3MF_BYTES + 1)
+    if len(file_bytes) > _MAX_3MF_BYTES:
+        raise HTTPException(status_code=413, detail="This 3MF is too large")
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+            archive.namelist()
+    except (zipfile.BadZipFile, ValueError, OSError, EOFError) as exc:
+        raise HTTPException(status_code=400, detail="MakerWorld sent a file that is not a valid 3MF") from exc
+
+    service = await _build_service(db, provider, current_user, api_key_cloud_owner)
+    try:
+        design = await service.get_design(model_id)
+    except ProviderError as exc:
+        raise _map_service_error(exc) from exc
+    finally:
+        await service.close()
+    profile_id = next(
+        (
+            i.get("profileId")
+            for i in design.get("instances") or []
+            if isinstance(i, dict) and i.get("id") == instance_id
+        ),
+        None,
+    )
+    if not isinstance(profile_id, int):
+        raise HTTPException(status_code=404, detail="This plate isn't part of that model")
+
+    filename = os.path.basename(unquote(file.filename or ""))
+    if not filename.lower().endswith(".3mf"):
+        filename = f"makerworld-{model_id}.3mf"
+    cloud_token_user = current_user or api_key_cloud_owner
+    source_url = provider.canonical_url(
+        ProviderResourceRef(source_type=provider.source_type, external_id=str(model_id), sub_id=str(profile_id))
+    )
+    library_file, was_existing = await save_3mf_bytes_to_library(
+        db,
+        file_bytes=file_bytes,
+        filename=filename,
+        folder_id=await _default_folder_id(db, provider),
+        source_type=provider.source_type,
+        source_url=source_url,
+        owner_id=cloud_token_user.id if cloud_token_user else None,
+    )
+    if not was_existing:
+        library_file.file_metadata = {**(library_file.file_metadata or {}), PRINT_FLOW_MARK: True}
+        await db.commit()
+    return MakerWorldImportResponse(
+        library_file_id=library_file.id,
+        filename=library_file.filename,
+        folder_id=library_file.folder_id,
+        profile_id=profile_id,
         was_existing=was_existing,
     )
 
@@ -623,6 +719,15 @@ async def start_print_flow(
                     api_key_cloud_owner=api_key_cloud_owner,
                 )
             except HTTPException as exc:
+                if exc.status_code == 424:
+                    # The flow asks the phone app, whose MakerWorld session can fetch it.
+                    return {
+                        "printer_id": printer_id,
+                        "block": "needs_device_download",
+                        "block_detail": str(exc.detail),
+                        "model_id": int(ref.external_id),
+                        "instance_id": instance_id,
+                    }
                 raise http_exception_to_job_error(exc) from exc
             source = await task_db.get(LibraryFile, imported.library_file_id)
             if not imported.was_existing:

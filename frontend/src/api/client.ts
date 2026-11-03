@@ -2147,8 +2147,11 @@ export interface MakerworldPrintResult extends SliceResponse {
   /** The MakerWorld profile was made for this printer and nozzle. */
   matched_profile?: boolean;
   /** Whole-flow hand-over (nothing sliced): the model doesn't fit the bed. */
-  block?: 'bed_overflow' | 'no_filament_preset';
+  block?: 'bed_overflow' | 'no_filament_preset' | 'needs_device_download';
   block_detail?: string;
+  /** With `needs_device_download`: the plate the phone app should fetch. */
+  model_id?: number;
+  instance_id?: number;
   source_filename?: string;
   /** The go-to process preset and the creator's settings carried — what
    *  "Edit settings" starts from. */

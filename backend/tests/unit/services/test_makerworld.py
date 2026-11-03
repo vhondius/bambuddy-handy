@@ -454,7 +454,7 @@ class TestGetDownload:
         service.get_design = AsyncMock(return_value=self._design())
         service.get_profile_download = AsyncMock(return_value={"name": "benchy.3mf", "message": "Not allowed"})
 
-        with pytest.raises(MakerWorldForbiddenError, match=r"\(Not allowed\).*model page"):
+        with pytest.raises(MakerWorldForbiddenError, match=r"\(Not allowed\).*Download the 3MF"):
             await self._run(service, ProviderResourceRef(source_type="makerworld", external_id="1400373"))
 
     @pytest.mark.asyncio
@@ -462,7 +462,7 @@ class TestGetDownload:
         service.get_design = AsyncMock(return_value=self._design())
         service.get_profile_download = AsyncMock(return_value={"name": "benchy.3mf", "message": "success"})
 
-        with pytest.raises(MakerWorldForbiddenError, match="this plate. Check whether"):
+        with pytest.raises(MakerWorldForbiddenError, match="this plate. Download the 3MF"):
             await self._run(service, ProviderResourceRef(source_type="makerworld", external_id="1400373"))
 
 

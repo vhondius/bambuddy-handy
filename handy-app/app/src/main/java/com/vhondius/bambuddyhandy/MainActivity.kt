@@ -31,6 +31,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.snackbar.Snackbar
 import java.io.ByteArrayInputStream
 import java.net.URLEncoder
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -425,6 +426,46 @@ class MainActivity : AppCompatActivity() {
                 nav.selectedItemId = R.id.tab_makerworld
             }
         }
+
+        /**
+         * Bambu's API gave Bambuddy no link: fetch the plate with the MakerWorld
+         * tab's session and stream it to Bambuddy. Nothing is stored on the phone.
+         */
+        @JavascriptInterface
+        fun fetchPlate(modelId: String, instanceId: String, token: String) {
+            val model = modelId.toLongOrNull()
+            val instance = instanceId.toLongOrNull()
+            runOnUiThread {
+                val base = SettingsTab.baseUrl(this@MainActivity)
+                // The bridge stays attached if the tab wanders off; only Bambuddy may ask.
+                if (base == null || bambuddy.url?.startsWith(base) != true) return@runOnUiThread
+                if (model == null || instance == null || !isMakerworld(Uri.parse(makerworld.url ?: ""))) {
+                    plateResult(getString(R.string.plate_open_makerworld))
+                    return@runOnUiThread
+                }
+                makerworld.evaluateJavascript(PlateTransfer.linkRequestJs(instance)) { raw ->
+                    val apiKey = SettingsTab.apiKey(this@MainActivity)
+                    Thread {
+                        val error = try {
+                            val link = PlateTransfer.parseLink(raw)
+                            PlateTransfer.send(link, "$base/api/v1/makerworld/print/device-plate?model_id=$model&instance_id=$instance", token, apiKey)
+                            null
+                        } catch (_: PlateTransfer.SignedOut) {
+                            getString(R.string.plate_sign_in)
+                        } catch (e: Exception) {
+                            getString(R.string.plate_failed, e.message ?: e.javaClass.simpleName)
+                        }
+                        runOnUiThread { plateResult(error) }
+                    }.start()
+                }
+            }
+        }
+    }
+
+    private fun plateResult(error: String?) {
+        if (isDestroyed) return
+        val arg = if (error == null) "null" else JSONObject.quote(error)
+        bambuddy.evaluateJavascript("window.BambuddyHandyPlateResult && window.BambuddyHandyPlateResult($arg)", null)
     }
 
     /** Called by inject.js. Only exposed to the MakerWorld tab. */

@@ -43,6 +43,7 @@ from backend.app.services.model_providers.makerworld.auth import is_cloud_token_
 from backend.app.services.model_providers.makerworld.errors import (
     MakerWorldAuthError,
     MakerWorldForbiddenError,
+    MakerWorldNoDownloadError,
     MakerWorldNotFoundError,
     MakerWorldUnavailableError,
     MakerWorldUrlError,
@@ -296,9 +297,10 @@ class MakerWorldService(ProviderService):
                 (manifest[k] for k in ("error", "message", "detail") if manifest.get(k) not in (None, "", "success")),
                 None,
             )
-            raise MakerWorldForbiddenError(
+            raise MakerWorldNoDownloadError(
                 f"MakerWorld refused to download this plate{f' ({upstream})' if upstream else ''}. "
-                "Check whether the model page on makerworld.com offers a download."
+                "Download the 3MF from makerworld.com and upload it to Bambuddy's library.",
+                ref=replace(ref, sub_id=str(profile_id)),
             )
 
         # Raw upstream name — the route layer basenames / percent-decodes it

@@ -22,6 +22,9 @@
     <string name="invalid_url">Enter an address starting with http:// or https://</string>
     <string name="saved">Saved</string>
     <string name="set_address_first">Set the Bambuddy address first.</string>
+    <string name="plate_open_makerworld">Open the MakerWorld tab, then try again.</string>
+    <string name="plate_sign_in">Sign in to MakerWorld in the MakerWorld tab, then try again.</string>
+    <string name="plate_failed">Couldn\'t get this plate from MakerWorld: %1$s</string>
     <string name="no_makerworld_link">No MakerWorld link found in the shared text.</string>
     <string name="blocked_cleartext">Blocked an insecure (http) link to %1$s</string>
     <string name="notifications_label">Print notifications</string>

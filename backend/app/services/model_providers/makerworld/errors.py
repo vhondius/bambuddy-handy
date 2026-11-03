@@ -11,6 +11,7 @@ from backend.app.services.model_providers.base import (
     ProviderAuthError,
     ProviderError,
     ProviderForbiddenError,
+    ProviderNoDownloadError,
     ProviderNotFoundError,
     ProviderUnavailableError,
     ProviderUrlError,
@@ -30,6 +31,10 @@ class MakerWorldForbiddenError(ProviderForbiddenError, MakerWorldError):
     """Raised when MakerWorld refuses access despite valid authentication —
     content-gated (points required, purchase required, region restricted,
     early-access, etc.)."""
+
+
+class MakerWorldNoDownloadError(ProviderNoDownloadError, MakerWorldForbiddenError):
+    """Raised when the download endpoint answers 200 with no signed URL."""
 
 
 class MakerWorldNotFoundError(ProviderNotFoundError, MakerWorldError):
