@@ -48,5 +48,7 @@
     <string name="notify_error">%1$s: printer error</string>
     <string name="notify_offline">%1$s: printer offline</string>
     <string name="update_available">Version %1$s is available</string>
-    <string name="update_download">Download</string>
+    <string name="update_download">Update</string>
+    <string name="update_downloading">Downloading the update…</string>
+    <string name="update_failed">Couldn\'t install the update. Opening the download instead.</string>
 </resources>

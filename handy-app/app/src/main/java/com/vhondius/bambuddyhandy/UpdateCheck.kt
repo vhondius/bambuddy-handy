@@ -1,5 +1,9 @@
 package com.vhondius.bambuddyhandy
 
+import android.content.Context
+import android.content.IntentSender
+import android.content.pm.PackageInstaller
+import android.os.Build
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -42,6 +46,42 @@ fun parseLatestRelease(json: String, current: String): AppUpdate? {
     val url = listOfNotNull(apk, release.optString("html_url")).firstOrNull { it.startsWith(DOWNLOADS) }
         ?: return null
     return AppUpdate(tag.removePrefix("v"), url)
+}
+
+/**
+ * Streams the APK at [apkUrl] into an install session and commits it; Android
+ * reports back through [target]. The session is Android's, so nothing lands in
+ * Downloads. Blocks, so call it off the main thread.
+ */
+fun stageUpdate(context: Context, apkUrl: String, target: IntentSender) {
+    val installer = context.packageManager.packageInstaller
+    val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+        setAppPackageName(context.packageName)
+        // Android skips the prompt when it allows that for this app; otherwise it just asks.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+        }
+    }
+    val id = installer.createSession(params)
+    try {
+        val conn = URL(apkUrl).openConnection() as HttpURLConnection
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 60_000
+        try {
+            installer.openSession(id).use { session ->
+                session.openWrite("update.apk", 0, conn.contentLengthLong).use { out ->
+                    conn.inputStream.use { it.copyTo(out) }
+                    session.fsync(out)
+                }
+                session.commit(target)
+            }
+        } finally {
+            conn.disconnect()
+        }
+    } catch (e: Exception) {
+        installer.abandonSession(id)
+        throw e
+    }
 }
 
 /** Asks GitHub for the latest release. Blocks, so call it off the main thread. Null on no update or any failure. */

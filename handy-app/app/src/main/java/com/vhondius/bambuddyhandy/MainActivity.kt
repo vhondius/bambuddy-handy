@@ -3,8 +3,13 @@ package com.vhondius.bambuddyhandy
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.Manifest
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageInstaller
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.Uri
@@ -22,6 +27,8 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -374,13 +381,58 @@ class MainActivity : AppCompatActivity() {
                 if (isDestroyed) return@runOnUiThread
                 Snackbar.make(nav, getString(R.string.update_available, update.version), UPDATE_BAR_MS)
                     .setAnchorView(nav)
-                    .setAction(R.string.update_download) {
-                        try {
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(update.url)))
-                        } catch (_: ActivityNotFoundException) {
-                        }
-                    }
+                    .setAction(R.string.update_download) { installUpdate(update) }
                     .show()
+            }
+        }.start()
+    }
+
+    private fun openInBrowser(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: ActivityNotFoundException) {
+        }
+    }
+
+    /** Installs [update] through Android's installer; the browser is the fallback when that fails. */
+    private fun installUpdate(update: AppUpdate) {
+        if (!update.url.endsWith(".apk")) {
+            openInBrowser(update.url) // A release without an APK: only its page can help.
+            return
+        }
+        Toast.makeText(this, R.string.update_downloading, Toast.LENGTH_SHORT).show()
+        val action = "$packageName.UPDATE_STATUS"
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+                if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                    // Android's own prompt, including its "install unknown apps" step.
+                    IntentCompat.getParcelableExtra(intent, Intent.EXTRA_INTENT, Intent::class.java)?.let { startActivity(it) }
+                    return
+                }
+                unregisterReceiver(this)
+                if (status != PackageInstaller.STATUS_SUCCESS && status != PackageInstaller.STATUS_FAILURE_ABORTED) {
+                    Toast.makeText(context, R.string.update_failed, Toast.LENGTH_LONG).show()
+                    openInBrowser(update.url)
+                }
+            }
+        }
+        ContextCompat.registerReceiver(this, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
+        val target = PendingIntent.getBroadcast(
+            this,
+            0,
+            Intent(action).setPackage(packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        ).intentSender
+        Thread {
+            try {
+                stageUpdate(this, update.url, target)
+            } catch (_: Exception) {
+                runOnUiThread {
+                    unregisterReceiver(receiver)
+                    Toast.makeText(this, R.string.update_failed, Toast.LENGTH_LONG).show()
+                    openInBrowser(update.url)
+                }
             }
         }.start()
     }
