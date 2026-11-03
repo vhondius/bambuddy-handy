@@ -3796,6 +3796,14 @@ async def get_library_file_filament_requirements(
     }
 
 
+# Plate names the slicers don't know. Both the OrcaSlicer and Bambu Studio CLIs
+# read an unknown ``curr_bed_type`` as Cool Plate, without any warning.
+_BED_TYPE_CLI_NAMES = {
+    "Cool Plate (SuperTack)": "Supertack Plate",
+    "Smooth PEI Plate": "High Temp Plate",
+}
+
+
 def _patch_process_bed_type(process_json: str, bed_type: str) -> str:
     """Overwrite ``curr_bed_type`` in a process-profile JSON before forwarding
     to the slicer sidecar.
@@ -3815,7 +3823,41 @@ def _patch_process_bed_type(process_json: str, bed_type: str) -> str:
         return process_json
     if not isinstance(profile, dict):
         return process_json
-    profile["curr_bed_type"] = bed_type
+    profile["curr_bed_type"] = _BED_TYPE_CLI_NAMES.get(bed_type, bed_type)
+    return json.dumps(profile)
+
+
+# Bambu's PETG profiles set Cool Plate to 0, which the slicers read as "plate not
+# supported". The plate does take PETG; 60 is below the profiles' 70 on PEI.
+_PETG_COOL_PLATE_TEMP = "60"
+
+
+def _patch_petg_cool_plate(filament_json: str, resolved: dict | None) -> str:
+    """Give a PETG profile a Cool Plate temperature if it has none.
+
+    ``resolved`` is the profile's flattened values: a Standard preset is only an
+    ``inherits`` stub here, so its type and temperatures live in the sidecar.
+    Returns the original string for any other filament, for a PETG profile that
+    already sets a temperature, and when the values are unknown; the slicer then
+    decides as it would have.
+    """
+    if not isinstance(resolved, dict):
+        return filament_json
+    types = resolved.get("filament_type")
+    temps = resolved.get("cool_plate_temp")
+    first_type = types[0] if isinstance(types, list) and types else types
+    if not str(first_type or "").upper().startswith("PETG"):
+        return filament_json
+    if not isinstance(temps, list) or not temps or any(str(t) != "0" for t in temps):
+        return filament_json
+    try:
+        profile = json.loads(filament_json)
+    except json.JSONDecodeError:
+        return filament_json
+    if not isinstance(profile, dict):
+        return filament_json
+    profile["cool_plate_temp"] = [_PETG_COOL_PLATE_TEMP] * len(temps)
+    profile["cool_plate_temp_initial_layer"] = [_PETG_COOL_PLATE_TEMP] * len(temps)
     return json.dumps(profile)
 
 
@@ -4252,6 +4294,17 @@ async def _run_slicer_with_fallback(
     # Bounds silence rather than total slicing time (#2730), so a heavy model
     # that keeps reporting progress runs to completion however long it takes.
     service = SlicerApiService(api_url, timeout_seconds=await get_stall_timeout_seconds(db))
+
+    # ponytail: only an explicit Cool Plate pick, so a process preset that
+    # defaults to it still rejects PETG. Read the preset's curr_bed_type here if
+    # that comes up.
+    if request.bed_type == "Cool Plate" and not embedded_mode:
+        for i, filament_json in enumerate(filament_jsons):
+            try:
+                resolved = await service.resolve_profile(filament_json, "filament")
+            except SlicerApiUnavailableError:
+                break
+            filament_jsons[i] = _patch_petg_cool_plate(filament_json, resolved.values)
 
     # #1493: cross-nozzle-class re-slice (single <-> dual). Without
     # intervention the slicer rejects with either "G-code in unprintable

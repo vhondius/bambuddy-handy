@@ -14,7 +14,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from backend.app.api.routes.library import _patch_process_bed_type
+from backend.app.api.routes.library import _patch_petg_cool_plate, _patch_process_bed_type
 from backend.app.schemas.slicer import PresetRef, SliceRequest
 
 
@@ -78,3 +78,48 @@ class TestPatchProcessBedType:
     def test_returns_input_unchanged_when_json_is_not_a_dict(self):
         not_a_dict = json.dumps(["this", "is", "an", "array"])
         assert _patch_process_bed_type(not_a_dict, "Cool Plate") is not_a_dict
+
+
+class TestBedTypeCliNames:
+    """The slicer CLIs read an unknown plate name as Cool Plate, so PETG on
+    SuperTack failed with "Cool Plate does not support filament 1"."""
+
+    @pytest.mark.parametrize(
+        ("picked", "sent"),
+        [
+            ("Cool Plate (SuperTack)", "Supertack Plate"),
+            ("Smooth PEI Plate", "High Temp Plate"),
+            ("Supertack Plate", "Supertack Plate"),
+            ("Cool Plate", "Cool Plate"),
+        ],
+    )
+    def test_sends_the_name_the_cli_knows(self, picked, sent):
+        result = _patch_process_bed_type(json.dumps({"curr_bed_type": "Cool Plate"}), picked)
+        assert json.loads(result)["curr_bed_type"] == sent
+
+
+class TestPatchPetgCoolPlate:
+    STUB = json.dumps({"name": "Generic PETG", "inherits": "Generic PETG", "from": "system"})
+
+    def test_petg_without_a_temperature_gets_60(self):
+        resolved = {"filament_type": ["PETG"], "cool_plate_temp": ["0", "0"]}
+        patched = json.loads(_patch_petg_cool_plate(self.STUB, resolved))
+        assert patched["cool_plate_temp"] == ["60", "60"]
+        assert patched["cool_plate_temp_initial_layer"] == ["60", "60"]
+        assert patched["inherits"] == "Generic PETG"
+
+    def test_petg_cf_counts_as_petg(self):
+        resolved = {"filament_type": ["PETG-CF"], "cool_plate_temp": ["0"]}
+        assert json.loads(_patch_petg_cool_plate(self.STUB, resolved))["cool_plate_temp"] == ["60"]
+
+    @pytest.mark.parametrize(
+        "resolved",
+        [
+            {"filament_type": ["ABS"], "cool_plate_temp": ["0"]},
+            {"filament_type": ["PETG"], "cool_plate_temp": ["55"]},
+            {"filament_type": ["PETG"]},
+            None,
+        ],
+    )
+    def test_everything_else_is_left_alone(self, resolved):
+        assert _patch_petg_cool_plate(self.STUB, resolved) is self.STUB
