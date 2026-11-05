@@ -1,11 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Status bar icon: Android uses only the shape, so one flat colour. -->
+<!-- Status bar icon: the launcher logo as one flat shape, since Android uses only the alpha.
+     Coordinates are pixels of mipmap-xxxhdpi/ic_launcher_foreground.png. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M3,3h18v18h-2v-2H5v2H3V3zM5,5v2h14V5H5zM10,9h4v2l-1.5,2h-1L10,11V9zM7,15h10v2H7V15z" />
+    android:viewportWidth="208"
+    android:viewportHeight="208">
+    <group
+        android:translateX="-111.5"
+        android:translateY="-112">
+        <!-- Frame; the inner outline runs the other way to leave a hole. -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M146,120H285A21,21 0 0 1 306,141V291A21,21 0 0 1 285,312H146A21,21 0 0 1 125,291V141A21,21 0 0 1 146,120ZM146,131A10,10 0 0 0 136,141V291A10,10 0 0 0 146,301H285A10,10 0 0 0 295,291V141A10,10 0 0 0 285,131Z" />
+        <!-- Gantry, print head, nozzle, bed. -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M136,154H193V149A6,6 0 0 1 199,143H233A6,6 0 0 1 239,149V154H295V162.5H239V168A6,6 0 0 1 233,174H199A6,6 0 0 1 193,168V162.5H136ZM215.5,172.5L227.5,183L215.5,194L203.5,183ZM149,275H282A2,2 0 0 1 284,277V282A2,2 0 0 1 282,284H149A2,2 0 0 1 147,282V277A2,2 0 0 1 149,275Z" />
+        <!-- Bamboo and leaf. -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M207,207.5H223.5A6,6 0 0 1 229.5,213.5V239H230A2.5,2.5 0 0 1 230,244H229.5V269A6,6 0 0 1 223.5,275H207A6,6 0 0 1 201,269V244H200A2.5,2.5 0 0 1 200,239H201V213.5A6,6 0 0 1 207,207.5ZM233,241C232,232 235,227 240,224L261,215C264,220 263,226 259,230C254,235 243,238 233,241Z" />
+    </group>
 </vector>
