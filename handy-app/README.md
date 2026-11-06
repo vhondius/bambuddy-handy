@@ -10,7 +10,7 @@ strips share the bar's colour.
   get a green **Print with Bambuddy** button.
 - **Printer** tab: Bambuddy's printers page on its own — status, progress,
   AMS, camera — without Bambuddy's menu, so it stays on the printers.
-- **Bambuddy** tab: the one-tap print flow. The button opens
+- **Bambuddy** tab: the print flow. The button opens
   `<address>/makerworld?url=…` here: slice, preview, print. With no flow open
   it shows "Nothing to print yet" with a small **Open Bambuddy** button for
   the full Bambuddy; Back from its first page returns to that screen.

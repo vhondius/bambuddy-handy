@@ -1,7 +1,7 @@
 <h1 align="center">📱 Bambuddy Handy</h1>
 
 <p align="center">
-  <strong>One-tap MakerWorld printing on your phone, through your own Bambuddy.</strong><br>
+  <strong>Print MakerWorld models from your phone, through your own Bambuddy.</strong><br>
   An open-source Android counterpart to Bambu Handy, plus the Bambuddy fork that makes it possible.
 </p>
 
@@ -14,8 +14,8 @@
 
 **Bambuddy Handy** is an open-source Android app that works like Bambu Handy,
 but sends your prints through **your own Bambuddy** instead of Bambu's cloud.
-Find a model on MakerWorld, tap **Print with Bambuddy**, check the preview, and
-print. And unlike Bambu Handy, you can **change the slicer settings** before
+Find a model on MakerWorld, tap **Print with Bambuddy**, wait for it to slice,
+check the preview and the AMS slots, and print. And unlike Bambu Handy, you can **change the slicer settings** before
 you print.
 
 ## What it does
@@ -23,19 +23,28 @@ you print.
 - **MakerWorld tab:** browse and sign in as usual. Every model page gets a
   **Print with Bambuddy** button. You can also share a MakerWorld link to the
   app from any other app.
-- **One tap to a sliced preview:** Bambuddy downloads the model and picks the
-  print profile made for your printer. If the model has none, it adapts one made
-  for another printer. It then matches the filaments to what is loaded in your
-  AMS and slices on your server. You see print time, filament use and a G-code
-  preview.
+- **Slice on your server:** Bambuddy downloads the print profile you picked on
+  MakerWorld and slices it with your printer's **go-to print profile**. When the
+  profile was made for your printer model, the creator's own changes are kept.
+  If you have more than one printer, you choose one first. Slicing takes a
+  little while; you can watch its progress.
+- **Check the preview:** print time, filament use, a G-code preview,
+  and each plate of the profile. Filaments are matched to what is loaded in your
+  AMS; you can change the tray for each one.
 - **Edit settings:** change slicer settings (layer height, walls, infill,
-  supports, …) and filaments, then re-slice.
-- **Print:** confirm the AMS slots and send the job to the printer.
+  supports, …), filaments and the build plate, or leave objects out, then
+  re-slice.
+- **Print:** send the job to the printer.
 - **Printer tab:** live status, temperatures, AMS, camera and controls.
+- **Notifications (optional):** the app checks Bambuddy now and then and tells
+  you when a print finishes, pauses or fails, or a printer has an error or goes
+  offline. On an idle phone a notification can come up to about 15 minutes late.
 
 **What still goes through Bambu:** MakerWorld is Bambu's site, so browsing it
 and downloading models uses your Bambu account. Bambuddy signs in to Bambu
-Cloud only for those downloads. Slicing, sending prints and printer status all
+Cloud only for those downloads. When Bambu doesn't give Bambuddy a download
+link for a model, the app downloads that plate with your MakerWorld sign-in and
+hands it to Bambuddy; nothing is kept on the phone. Slicing, sending prints and printer status all
 run on your own Bambuddy. Away from home, reach Bambuddy over your VPN.
 
 ## Getting started
@@ -46,7 +55,7 @@ run on your own Bambuddy. Away from home, reach Bambuddy over your VPN.
    `docker compose up -d` or any Docker manager.
 2. **In Bambuddy:**
    - Under *Settings → Slicer*, choose the slicer service Bambuddy should use.
-     Bambuddy supports OrcaSlicer and Bambu Studio; the one-tap flow was
+     Bambuddy supports OrcaSlicer and Bambu Studio; the print flow was
      tested with OrcaSlicer.
    - Sign in to Bambu Cloud, for MakerWorld downloads.
    - Give each printer a **go-to print profile** in its printer settings. You
@@ -54,25 +63,31 @@ run on your own Bambuddy. Away from home, reach Bambuddy over your VPN.
 3. **Install the app:** download the APK from the
    [latest release](https://github.com/vhondius/bambuddy-handy/releases/latest) and open it on your phone (allow installing from
    unknown sources when asked). On first start, enter your Bambuddy address.
+   If Bambuddy has sign-in turned on, also add an API key that may read printer
+   status.
    To build it yourself, see [`handy-app/`](handy-app/README.md).
 
-**No Android phone?** The same one-tap flow works in any browser: put your
+**No Android phone?** The same print flow works in any browser: put your
 Bambuddy address and `/makerworld?url=` in front of a MakerWorld link, e.g.
 `http://192.168.1.10:8000/makerworld?url=https://makerworld.com/en/models/…`.
+Without the app, models Bambu gives no download link for can't be printed this
+way.
 
 ## About the fork
 
 This is a fork of [maziggy/bambuddy](https://github.com/maziggy/bambuddy).
-Its changes exist to make the app's one-tap printing possible; everything else in Bambuddy works as before. Things you may
+Its changes exist to make the app's MakerWorld printing possible; everything else in Bambuddy works as before. Things you may
 notice as a Bambuddy user:
 
-- The **one-tap print flow** described above, at `/makerworld?url=…`.
+- The **MakerWorld print flow** described above, at `/makerworld?url=…`.
 - A **go-to print profile** per printer, set in the printer settings and used
-  when a model has no profile for your printer.
+  for every model the flow slices.
 - The **Slice dialog** starts from that go-to profile, also finds edited
   printer presets, and lets you search long preset lists by typing.
+- **Local presets** can be edited, duplicated and saved as new ones, and preset
+  lists show only what the active slicer can use.
 - Slicing progress now updates live.
-- Files the one-tap flow downloads and slices are **removed after an hour**,
+- Files the print flow downloads and slices are **removed after an hour**,
   unless they are in the print queue.
 - An open tab **reloads itself after an update** instead of getting stuck.
 
